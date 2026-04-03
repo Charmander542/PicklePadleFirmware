@@ -1,4 +1,4 @@
-# PicklePaddel
+# PicklePaddle
 
 Firmware for an ESP32 “paddle” build: **BNO055** IMU, **TCA9548A** I²C mux with **DRV2605** haptics and a **0.91″ OLED**, **NeoPixel** strip, **PWM speaker**, **SD card** logging, **Wi‑Fi** (captive portal + STA), and **UDP** to a game host.  
 
@@ -52,7 +52,7 @@ ESP-IDF tooling used by this project can fail if PlatformIO’s packages live un
 | **`include/paddle_fx_config.h`** | NeoPixel **count** and **brightness**. |
 | **`include/paddle_fx_led.h`** | NeoPixel **animations** (colors, delays). |
 | **`include/paddle_fx.h`** | **Haptic** step tables (DRV effects + mux channel). |
-| **`lib/BNO055Fast/`** | IMU over **`Wire`** (same bus as mux). |
+| **Adafruit BNO055** (PIO lib) | IMU over **`Wire`**; I2C addr `kBno055I2cAddr` in `app_config.h` (0x29 = SA0 high). |
 | **`lib/HapticMux/`** | TCA9548A + **Adafruit DRV2605**. |
 | **`lib/DisplayManager/`** | Waveshare-style **0.91″ OLED** via **`lib/OLED091/`**. |
 | **`lib/NeoPixelStrip/`** | **Adafruit NeoPixel** wrapper. |

@@ -2,22 +2,25 @@
 
 #include "driver/gpio.h"
 
-// Single I2C bus: BNO055 (0x28), TCA9548A (0x70), OLED / DRV behind mux — same SDA/SCL.
-#define BUS_SDA GPIO_NUM_26
-#define BUS_SCL GPIO_NUM_27
+// Single I2C bus: BNO055 (0x28 or 0x29 from SA0), TCA9548A (0x70), OLED on the main segment.
+// Only DRV2605 haptics sit behind the mux downstream ports.
+#define BUS_SDA GPIO_NUM_21
+#define BUS_SCL GPIO_NUM_22
 
 #define TCA9548A_ADDR 0x70
-#define TCA_CH_DISPLAY 0
 #define DRV_I2C_ADDR_A 0x5A
 #define DRV_I2C_ADDR_B 0x5B
 
 #define OLED_I2C_ADDR 0x3C
+// SSD1306 SA0=1 modules use 0x3D; DisplayManager probes both.
+#define OLED_I2C_ADDR_ALT 0x3D
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 32
 
+
 // SD card (SPI)
 #define SD_CS GPIO_NUM_15
-#define SD_MOSI GPIO_NUM_12
+#define SD_MOSI GPIO_NUM_27
 #define SD_MISO GPIO_NUM_13
 #define SD_CLK GPIO_NUM_14
 

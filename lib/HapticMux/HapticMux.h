@@ -15,6 +15,10 @@ public:
 
     bool channelOk(uint8_t ch) const { return ch < 8 && hasDrv_[ch]; }
 
+    // TCA9548A: write 0 disconnects all downstream ports — use before talking to
+    // devices on the main bus (OLED, IMU) that are not behind the mux.
+    void disableMuxBranches();
+
     void selectChannel(uint8_t channel);
 
     // Play effect (library waveform index) on one channel; blocks ~msDelay.

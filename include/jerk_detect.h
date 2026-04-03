@@ -1,22 +1,18 @@
 // jerk_detect.h — header-only helper for impulse / “wing hit” style events from IMU linear accel.
 //
-// Feed linear acceleration (m/s^2) from BNO055Fast::readLinearAccel() + getLinearAccel().
-// Uses |Δa|/Δt on lightly low-pass-filtered samples (finite-difference jerk magnitude, m/s^3).
-//
-// Tuning: raise jerkThreshold_mps3 if you get false triggers; lower if misses soft hits.
-// Typical ballpark for stiff impulses: 1e3–1e4 m/s^3 (depends on loop rate and filtering).
+// Feed linear acceleration (m/s^2). Uses |Δa|/Δt on lightly low-pass-filtered samples.
 
 #pragma once
 
 #include <Arduino.h>
-#include <BNO055Fast.h>
 #include <math.h>
+
+struct Vec3 {
+    float x, y, z;
+};
 
 class JerkDetector {
 public:
-    // jerkThreshold_mps3: minimum jerk magnitude to count as an event.
-    // minRetriggerMs: debounce between consecutive detections.
-    // accelLpfAlpha: 0..1, higher = trust raw accel more (noisier jerk), lower = smoother.
     void configure(float jerkThreshold_mps3, uint32_t minRetriggerMs = 120,
                    float accelLpfAlpha = 0.2f) {
         threshold_ = jerkThreshold_mps3;
@@ -33,8 +29,7 @@ public:
 
     float lastJerkMagnitude() const { return lastJerk_; }
 
-    // Returns true once when a spike exceeds the threshold (debounced).
-    bool update(const Vec3& accel_mps2, uint32_t nowMs = 0) {
+    bool update(const Vec3 &accel_mps2, uint32_t nowMs = 0) {
         if (nowMs == 0) nowMs = millis();
 
         if (!hasPrev_) {

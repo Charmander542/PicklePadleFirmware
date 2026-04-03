@@ -46,5 +46,12 @@ void OLED_0in91_Init(void);
 void OLED_0in91_Clear(void);
 void OLED_0in91_Display(const UBYTE *Image);
 void OLED_0in91_Display_Array(const UBYTE *Image);
+void OLED_0in91_SetInvert(UBYTE invert);
+/** Re-apply charge pump, contrast, and display-on via controller commands. */
+void OLED_0in91_RefreshPanelPower(void);
+void OLED_0in91_SetContrast(UBYTE level);
+void OLED_0in91_SetDisplayOn(UBYTE on);
+/** 1 = force every segment on (ignores RAM, good hardware test); 0 = show GDDRAM (0xA4). */
+void OLED_0in91_SetAllPixelsForcedOn(UBYTE on);
 #endif  
 	 

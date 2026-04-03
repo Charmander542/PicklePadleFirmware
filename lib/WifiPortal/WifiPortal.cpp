@@ -1,10 +1,11 @@
 #include "WifiPortal.h"
 #include "DisplayManager.h"
+#include "NeoPixelStrip.h"
 
 static const char kHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width"/>
-<title>PicklePaddel WiFi</title></head><body>
-<h2>PicklePaddel setup</h2>
+<title>PicklePaddle WiFi</title></head><body>
+<h2>PicklePaddle setup</h2>
 <form method="POST" action="/save">
 <p>SSID<br><input name="ssid" style="width:90%"/></p>
 <p>Password (empty for open)<br><input name="pass" type="password" style="width:90%"/></p>
@@ -40,9 +41,13 @@ void WifiPortal::handleCaptive_() {
     server_.send(302, "text/plain", "");
 }
 
-bool WifiPortal::runBlockingSetupPortal(DisplayManager *disp) {
+bool WifiPortal::runBlockingSetupPortal(DisplayManager *disp, NeoPixelStrip *leds) {
     disp_ = disp;
+    leds_ = leds;
     saveRequested_ = false;
+    if (leds_) {
+        leds_->resetWifiLedAnim();
+    }
 
     WiFi.mode(WIFI_AP);
     WiFi.softAPConfig(apIP_, apIP_, IPAddress(255, 255, 255, 0));
@@ -61,12 +66,15 @@ bool WifiPortal::runBlockingSetupPortal(DisplayManager *disp) {
     server_.begin();
 
     if (disp_) {
-        disp_->showTwoLines("Setup WiFi", "Join: PicklePaddel-Setup");
+        disp_->showTwoLines("Setup WiFi", "Join: PicklePaddle-Setup");
     }
 
     while (!saveRequested_) {
         dns_.processNextRequest();
         server_.handleClient();
+        if (leds_) {
+            leds_->tickApPortal(WiFi.softAPgetStationNum() > 0);
+        }
         delay(5);
     }
     server_.stop();
@@ -75,7 +83,7 @@ bool WifiPortal::runBlockingSetupPortal(DisplayManager *disp) {
     return true;
 }
 
-bool WifiPortal::connectSta(DisplayManager *disp) {
+bool WifiPortal::connectSta(DisplayManager *disp, NeoPixelStrip *leds) {
     prefs_.begin(kPrefsNamespace, true);
     String ssid = prefs_.getString(kPrefsKeySsid, "");
     String pass = prefs_.getString(kPrefsKeyPass, "");
@@ -83,26 +91,46 @@ bool WifiPortal::connectSta(DisplayManager *disp) {
 
     if (ssid.length() == 0) return false;
 
+    if (leds) {
+        leds->resetWifiLedAnim();
+    }
+
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid.c_str(), pass.c_str());
 
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
-        delay(250);
+        if (leds) {
+            leds->tickStaConnecting();
+        }
+        delay(80);
     }
 
-    if (WiFi.status() == WL_CONNECTED) return true;
+    if (WiFi.status() == WL_CONNECTED) {
+        return true;
+    }
 
     if (strcmp(kFallbackSsid, ssid.c_str()) != 0) {
         if (disp) disp->showTwoLines("Retry open", kFallbackSsid);
         WiFi.disconnect();
         delay(200);
+        if (leds) {
+            leds->resetWifiLedAnim();
+        }
         WiFi.begin(kFallbackSsid);
         start = millis();
         while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
-            delay(250);
+            if (leds) {
+                leds->tickStaConnecting();
+            }
+            delay(80);
         }
     }
 
-    return WiFi.status() == WL_CONNECTED;
+    const bool ok = WiFi.status() == WL_CONNECTED;
+    if (!ok && leds) {
+        leds->resetWifiLedAnim();
+        leds->clear();
+    }
+    return ok;
 }

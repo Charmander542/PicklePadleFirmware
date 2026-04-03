@@ -31,20 +31,3 @@ void SpeakerDriver::quiet() {
     if (!ok_) return;
     ledcWriteTone(ch_, 0);
 }
-
-void SpeakerDriver::playBootRhythm() {
-    if (!ok_) return;
-    toneHz(523, 90);
-    toneHz(659, 90);
-    toneHz(784, 120);
-    toneHz(1046, 150);
-    quiet();
-}
-
-void SpeakerDriver::playBallHit() {
-    if (!ok_) return;
-    toneHz(880, 35);
-    toneHz(1320, 45);
-    toneHz(660, 60);
-    quiet();
-}

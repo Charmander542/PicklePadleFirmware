@@ -19,8 +19,21 @@ public:
     void playBootSequence();
     void playBallHit();
 
+    /** Setup AP: back-and-forth “loading” while a phone/PC is joined; idle (off) when none. */
+    void tickApPortal(bool stationConnected);
+    /** STA: ping-pong while associating to router. */
+    void tickStaConnecting();
+    /** STA: steady fill after WiFi is up. */
+    void showStaConnectedSolid();
+    void resetWifiLedAnim();
+
     Adafruit_NeoPixel &raw() { return strip_; }
 
 private:
+    void wifiPingPongFrame_();
+
     Adafruit_NeoPixel strip_;
+    uint32_t wifiAnimLastMs_{0};
+    int16_t wifiPingPos_{0};
+    int8_t wifiPingDir_{1};
 };

@@ -1,4 +1,9 @@
 #include "DEV_Config.h"
+#include "i2c_bus_lock.h"
+
+static uint8_t s_oled_i2c_addr = OLED_I2C_ADDR;
+
+void DEV_SetOledI2CAddr(uint8_t addr) { s_oled_i2c_addr = addr; }
 
 uint8_t System_Init(void) {
     // Wire.begin() + clock are configured by the application before OLED init.
@@ -6,7 +11,8 @@ uint8_t System_Init(void) {
 }
 
 void I2C_Write_Byte(uint8_t value, uint8_t Cmd) {
-    Wire.beginTransmission((uint8_t)OLED_I2C_ADDR);
+    I2cBusLock lk;
+    Wire.beginTransmission(s_oled_i2c_addr);
     Wire.write(Cmd);
     Wire.write(value);
     Wire.endTransmission();

@@ -127,6 +127,38 @@ void OLED_0in91_Init()
     OLED_WriteReg(0xaf);
 }
 
+void OLED_0in91_SetInvert(UBYTE invert)
+{
+    OLED_WriteReg(invert ? 0xa7 : 0xa6);
+}
+
+void OLED_0in91_SetContrast(UBYTE level)
+{
+    OLED_WriteReg(0x81);
+    OLED_WriteReg(level);
+}
+
+void OLED_0in91_SetDisplayOn(UBYTE on)
+{
+    OLED_WriteReg(on ? 0xaf : 0xae);
+}
+
+void OLED_0in91_SetAllPixelsForcedOn(UBYTE on)
+{
+    OLED_WriteReg(on ? 0xa5 : 0xa4);
+}
+
+void OLED_0in91_RefreshPanelPower(void)
+{
+    /* Charge pump on, max contrast, follow RAM, display on. */
+    OLED_WriteReg(0x8d);
+    OLED_WriteReg(0x14);
+    OLED_WriteReg(0x81);
+    OLED_WriteReg(0xff);
+    OLED_WriteReg(0xa4);
+    OLED_WriteReg(0xaf);
+}
+
 
 /********************************************************************************
 function:

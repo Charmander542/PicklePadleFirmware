@@ -17,6 +17,8 @@ public:
     void refresh();
 
 private:
+    void runInitSelfTest_();
+
     HapticMux &mux_;
     bool ok_{false};
     uint8_t *canvas_{nullptr};

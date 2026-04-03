@@ -8,14 +8,15 @@
 #include "app_config.h"
 
 class DisplayManager;
+class NeoPixelStrip;
 
 class WifiPortal {
 public:
     // AP + captive DNS + config web. Blocks until client submits form; saves NVS and returns true (caller should restart).
-    bool runBlockingSetupPortal(DisplayManager *disp);
+    bool runBlockingSetupPortal(DisplayManager *disp, NeoPixelStrip *leds = nullptr);
 
     // STA with stored credentials; optional open-network fallback.
-    bool connectSta(DisplayManager *disp);
+    bool connectSta(DisplayManager *disp, NeoPixelStrip *leds = nullptr);
 
 private:
     void handleRoot_();
@@ -27,5 +28,6 @@ private:
     DNSServer dns_;
     Preferences prefs_;
     DisplayManager *disp_{nullptr};
+    NeoPixelStrip *leds_{nullptr};
     IPAddress apIP_{192, 168, 4, 1};
 };

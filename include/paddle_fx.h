@@ -1,8 +1,9 @@
-// paddle_fx.h — haptic tables (edit here). Neo visuals: paddle_fx_led.h.
+// paddle_fx.h — haptic tables (edit here). Neo: paddle_fx_led.h, speaker: paddle_fx_audio.h.
 
 #pragma once
 
 #include "paddle_fx_led.h"
+#include "paddle_fx_audio.h"
 #include "pins.h"
 #include <HapticMux.h>
 

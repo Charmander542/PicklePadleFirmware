@@ -1,5 +1,6 @@
 #include "NetUdp.h"
 #include <SdLogger.h>
+#include <freertos/task.h>
 #include <string.h>
 
 bool NetUdp::begin(uint16_t localPort) {
@@ -26,6 +27,7 @@ bool NetUdp::postText(const char *msg) {
 }
 
 bool NetUdp::sendNowUnlocked_(const char *msg) {
+    if (!msg || msg[0] == 0) return false;
     if (WiFi.status() != WL_CONNECTED) return false;
 
     IPAddress ip;
@@ -35,10 +37,25 @@ bool NetUdp::sendNowUnlocked_(const char *msg) {
     port = g_hostPort;
     xSemaphoreGive(g_stateMutex);
 
+    if (port == 0 || ip == IPAddress(0, 0, 0, 0)) return false;
+
     if (xSemaphoreTake(sendMu_, pdMS_TO_TICKS(200)) != pdTRUE) return false;
-    udp_.beginPacket(ip, port);
-    udp_.print(msg);
-    bool ok = udp_.endPacket() > 0;
+
+    constexpr int kUdpSendAttempts = 4;
+    bool ok = false;
+    for (int attempt = 0; attempt < kUdpSendAttempts; ++attempt) {
+        if (attempt > 0) {
+            vTaskDelay(pdMS_TO_TICKS(2));
+        }
+        if (!udp_.beginPacket(ip, port)) {
+            continue;
+        }
+        udp_.print(msg);
+        if (udp_.endPacket() > 0) {
+            ok = true;
+            break;
+        }
+    }
     xSemaphoreGive(sendMu_);
     return ok;
 }
@@ -68,8 +85,11 @@ void NetUdp::service() {
         }
     }
 
-    NetOutgoingMsg m;
-    while (xQueueReceive(g_netTxQueue, &m, 0) == pdTRUE) {
+    // Drain only a few TX per tick so lwIP can free pbufs (burst sends often hit errno 12 / ENOMEM).
+    constexpr UBaseType_t kMaxTxPerService = 4;
+    for (UBaseType_t tx = 0; tx < kMaxTxPerService; ++tx) {
+        NetOutgoingMsg m;
+        if (xQueueReceive(g_netTxQueue, &m, 0) != pdTRUE) break;
         if (SdLogger::instance().ok()) SdLogger::instance().logf("udp tx: %s", m.text);
         sendNowUnlocked_(m.text);
     }

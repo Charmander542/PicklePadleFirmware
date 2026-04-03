@@ -22,6 +22,8 @@ private:
     SdLogger() = default;
 
     bool ok_{false};
+    /** After one failed mount, never touch SD/SPI again this boot (avoids hangs/panics). */
+    bool giveUp_{false};
     SemaphoreHandle_t mu_{nullptr};
     char path_[32]{"/paddle.log"};
 };

@@ -22,6 +22,7 @@
 #endif
 
 uint8_t System_Init(void);
+void DEV_SetOledI2CAddr(uint8_t addr);
 void I2C_Write_Byte(uint8_t value, uint8_t Cmd);
 void Driver_Delay_ms(unsigned long xms);
 void Driver_Delay_us(int xus);

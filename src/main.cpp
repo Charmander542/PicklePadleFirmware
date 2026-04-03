@@ -1,15 +1,20 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <Preferences.h>
+#include <stdarg.h>
 #include <stdio.h>
 
 #include "pins.h"
+#include "i2c_bus_lock.h"
 #include "app_config.h"
 #include "app_state.h"
 #include "jerk_detect.h"
 #include "paddle_fx.h"
 
-#include <BNO055Fast.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BNO055.h>
+#include <utility/imumaths.h>
+
 #include <NeoPixelStrip.h>
 #include <SpeakerDriver.h>
 #include <HapticMux.h>
@@ -22,11 +27,58 @@ static NeoPixelStrip gStrip;
 static SpeakerDriver gSpk;
 static HapticMux gMux;
 static DisplayManager gDisp(gMux);
-static BNO055Fast gImu(&Wire);
+static Adafruit_BNO055 gBno(55, kBno055I2cAddr);
 static JerkDetector gJerk;
 static NetUdp gNet;
 static WifiPortal gPortal;
 static bool s_imuReady = false;
+
+static bool imuBeginAdafruit() {
+    I2cBusLock lk;
+    gMux.disableMuxBranches();
+    // Adafruit begin() polls until the chip ACKs; slow clock + settle reduces failed tries
+    // (each failure logs Wire "[E] requestFrom..."). Bus pins already set in beginWire().
+    Wire.setTimeOut(400);
+    Wire.setClock(50000);
+    delay(120);
+    if (!gBno.begin()) {
+        return false;
+    }
+    delay(100);
+    gBno.setExtCrystalUse(true);
+    Wire.setClock(kImuI2cHz);
+    Wire.setTimeOut(kImuWireTimeoutMs);  // 263 on Wire = ESP_ERR_TIMEOUT; avoid under WiFi
+    return true;
+}
+
+static void imuReadLinear(Vec3 *out) {
+    I2cBusLock lk;
+    gMux.disableMuxBranches();
+    Wire.setTimeOut(kImuWireTimeoutMs);
+    Wire.setClock(kImuReadClockHz);
+    imu::Vector<3> ev = gBno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
+    out->x = (float)ev.x();
+    out->y = (float)ev.y();
+    out->z = (float)ev.z();
+    Wire.setClock(kImuI2cHz);
+}
+
+/** Always prints to Serial; mirrors to SD when the logger mounted successfully. */
+static void bootLog(const char *line) {
+    Serial.println(line);
+    if (SdLogger::instance().ok()) {
+        SdLogger::instance().log(line);
+    }
+}
+
+static void bootLogf(const char *fmt, ...) {
+    char buf[160];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    bootLog(buf);
+}
 
 static void renderIdleUi() { gDisp.showTwoLines("Idle", "Ready"); }
 
@@ -38,7 +90,8 @@ static void drainUiEvents() {
             if (SdLogger::instance().ok()) SdLogger::instance().log("event: swing hit (host)");
             paddleFx_playSteps(gMux, kFxBallHitHaptic, PADDLE_FX_STEP_COUNT(kFxBallHitHaptic));
             gStrip.playBallHit();
-            gSpk.playBallHit();
+            paddleFx_playSpeakerSteps(gSpk, kFxBallHitSpeaker,
+                                      PADDLE_FX_SPEAKER_COUNT(kFxBallHitSpeaker));
             break;
         case UiEvent::ModeIdle:
             if (SdLogger::instance().ok()) SdLogger::instance().log("mode: idle");
@@ -56,10 +109,10 @@ static void drainUiEvents() {
 }
 
 static void pollButton(RunMode mode) {
-    (void)mode;
     static bool down = false;
     static uint32_t tDown = 0;
     static bool holdSent = false;
+    static bool wifiForgetArmed = false;
 
     const bool raw = (digitalRead(BUTTON_PIN) == LOW);
     const uint32_t now = millis();
@@ -69,9 +122,24 @@ static void pollButton(RunMode mode) {
             down = true;
             tDown = now;
             holdSent = false;
-        } else if (!holdSent && (now - tDown) >= kButtonHoldMs) {
-            holdSent = true;
-            gNet.postText("detect btn hold");
+            wifiForgetArmed = false;
+        } else {
+            if (!holdSent && (now - tDown) >= kButtonHoldMs) {
+                holdSent = true;
+                gNet.postText("detect btn hold");
+            }
+            if (mode == RunMode::Idle && (now - tDown) >= kWifiForgetHoldMs && !wifiForgetArmed) {
+                wifiForgetArmed = true;
+                gDisp.showTwoLines("WiFi setup", "Forgetting...");
+                Serial.println("[prefs] Clearing Wi-Fi credentials — rebooting to setup portal.");
+                Preferences prefs;
+                prefs.begin(kPrefsNamespace, false);
+                prefs.remove(kPrefsKeySsid);
+                prefs.remove(kPrefsKeyPass);
+                prefs.end();
+                delay(400);
+                ESP.restart();
+            }
         }
     } else {
         if (down) {
@@ -82,6 +150,7 @@ static void pollButton(RunMode mode) {
         }
         down = false;
         holdSent = false;
+        wifiForgetArmed = false;
     }
 }
 
@@ -99,15 +168,18 @@ static void appTask(void * /*param*/) {
             const uint32_t now = millis();
             if (now - lastImu >= kImuPeriodMs) {
                 lastImu = now;
-                if (gImu.readLinearAccel()) {
-                    const Vec3 a = gImu.getLinearAccel();
-                    if (gJerk.update(a, now)) {
-                        char buf[48];
-                        snprintf(buf, sizeof(buf), "%.1f", gJerk.lastJerkMagnitude());
-                        if (SdLogger::instance().ok())
-                            SdLogger::instance().logf("impulse tx %s", buf);
-                        gNet.postText(buf);
-                    }
+                Vec3 a;
+                imuReadLinear(&a);
+                if (gJerk.update(a, now)) {
+                    const float j = gJerk.lastJerkMagnitude();
+                    Serial.printf(
+                        "[imu] tx linear_accel m/s^2 x=%.3f y=%.3f z=%.3f  jerk=%.1f m/s^3\n",
+                        a.x, a.y, a.z, j);
+                    char buf[48];
+                    snprintf(buf, sizeof(buf), "%.1f", j);
+                    if (SdLogger::instance().ok())
+                        SdLogger::instance().logf("impulse tx %s", buf);
+                    gNet.postText(buf);
                 }
             }
         }
@@ -125,16 +197,32 @@ static void netTask(void * /*param*/) {
 
 static void bootProbeSequence() {
     gDisp.showTwoLines("Initializing Device...", "");
-    if (SdLogger::instance().ok()) SdLogger::instance().log("boot: start probes");
+    bootLog("boot: start probes");
 
     const bool ledOk = gStrip.begin();
     gDisp.showTwoLines("NeoPixel", ledOk ? "ok" : "no strip [X]");
-    if (SdLogger::instance().ok()) SdLogger::instance().logf("probe NeoPixel %s", ledOk ? "ok" : "FAIL");
+    bootLogf("probe NeoPixel %s", ledOk ? "ok" : "FAIL");
 
-    const bool imuOk = gImu.begin(400000);
+    // BNO055 before TCA/DRV scan: Adafruit begin() polls until the chip ACKs; mux traffic
+    // first caused many failed detections and Wire error spam on each retry.
+    gMux.disableMuxBranches();
+    delay(30);
+
+    const bool imuOk = imuBeginAdafruit();
     s_imuReady = imuOk;
     gDisp.showTwoLines("IMU", imuOk ? "ok" : "unable to connect IMU [X]");
-    if (SdLogger::instance().ok()) SdLogger::instance().logf("probe IMU %s", imuOk ? "ok" : "FAIL");
+    bootLogf("probe IMU (Adafruit) %s  addr=0x%02X  %lu Hz", imuOk ? "ok" : "FAIL",
+             (unsigned)kBno055I2cAddr, (unsigned long)kImuI2cHz);
+
+    if (imuOk) {
+        bootLog("imu: startup linear read test (5 samples, 100ms apart)");
+        for (int i = 0; i < 5; i++) {
+            Vec3 a;
+            imuReadLinear(&a);
+            bootLogf("imu: sample %d  %.2f %.2f %.2f m/s^2", i + 1, a.x, a.y, a.z);
+            delay(100);
+        }
+    }
 
     const int hCount = gMux.scanDrivers();
     if (hCount == 0) {
@@ -144,17 +232,17 @@ static void bootProbeSequence() {
         snprintf(line, sizeof(line), "found: %d", hCount);
         gDisp.showTwoLines("Haptics", line);
     }
-    if (SdLogger::instance().ok()) SdLogger::instance().logf("probe haptics count=%d", hCount);
+    bootLogf("probe haptics count=%d", hCount);
 
     const bool spkOk = gSpk.probe(SPEAKER_PWM, SPEAKER_LEDC_CHAN, SPEAKER_LEDC_BITS);
     gDisp.showTwoLines("Speaker", spkOk ? "ok" : "unable to connect Speaker [X]");
-    if (SdLogger::instance().ok()) SdLogger::instance().logf("probe speaker %s", spkOk ? "ok" : "FAIL");
+    bootLogf("probe speaker %s", spkOk ? "ok" : "FAIL");
 
     gDisp.showTwoLines("Device initialized.", "Startup FX...");
-    if (SdLogger::instance().ok()) SdLogger::instance().log("boot: startup FX");
+    bootLog("boot: startup FX");
 
     paddleFx_playSteps(gMux, kFxBootHaptic, PADDLE_FX_STEP_COUNT(kFxBootHaptic));
-    gSpk.playBootRhythm();
+    paddleFx_playSpeakerSteps(gSpk, kFxBootSpeaker, PADDLE_FX_SPEAKER_COUNT(kFxBootSpeaker));
     gStrip.playBootSequence();
 }
 
@@ -162,6 +250,7 @@ void setup() {
     Serial.begin(115200);
     delay(200);
 
+    i2cBusMutexInit();
     pinMode(BUTTON_PIN, INPUT_PULLUP);
 
     g_stateMutex = xSemaphoreCreateMutex();
@@ -171,18 +260,21 @@ void setup() {
     gMux.beginWire(BUS_SDA, BUS_SCL, 100000);
 
     if (!gMux.probeMux(TCA9548A_ADDR)) {
-        Serial.println("TCA9548A not found.");
+        Serial.println(
+            "[I2C] TCA9548A not detected by probe; still driving 0x70 for haptic channels.");
     }
+    gMux.disableMuxBranches();
 
     if (!gDisp.begin()) {
         Serial.println("OLED (0.91) init failed.");
     }
 
-    if (!SdLogger::instance().begin()) {
-        Serial.println("SD log disabled (no card or mount error).");
-    }
-
+    // Run UI / I2C probes before SD: no card must not block or reset before the display test.
     bootProbeSequence();
+
+    if (!SdLogger::instance().begin()) {
+        Serial.println("[boot] SD unavailable — continuing without file logging.");
+    }
 
     Preferences prefs;
     prefs.begin(kPrefsNamespace, true);
@@ -190,8 +282,8 @@ void setup() {
     prefs.end();
 
     if (ssid.length() == 0) {
-        gDisp.showTwoLines("WiFi setup", "AP: PicklePaddel-Setup");
-        gPortal.runBlockingSetupPortal(&gDisp);
+        gDisp.showTwoLines("WiFi setup", "AP: PicklePaddle-Setup");
+        gPortal.runBlockingSetupPortal(&gDisp, &gStrip);
         delay(200);
         ESP.restart();
     }
@@ -200,11 +292,13 @@ void setup() {
 
     gDisp.showTwoLines("Connecting...", ssid.c_str());
 
-    if (!gPortal.connectSta(&gDisp)) {
+    if (!gPortal.connectSta(&gDisp, &gStrip)) {
         gDisp.showTwoLines("WiFi", "Unable to connect to wifi. [X]");
         if (SdLogger::instance().ok()) SdLogger::instance().log("wifi: connect FAILED");
         delay(2500);
     } else {
+        WiFi.setSleep(false);  // modem sleep can starve I2C / CPU timing under load
+        gStrip.showStaConnectedSolid();
         char line[44];
         snprintf(line, sizeof(line), "IP: %s", WiFi.localIP().toString().c_str());
         gDisp.showTwoLines("Wifi Connected.", line);
@@ -219,7 +313,7 @@ void setup() {
     } else if (SdLogger::instance().ok()) {
         SdLogger::instance().logf("udp: listen port %u", (unsigned)kLocalUdpPort);
     }
-    if (g_hostAddr != IPAddress(0, 0, 0, 0)) {
+    if (g_hostAddr != IPAddress(0, 0, 0, 0) && g_hostPort != 0) {
         gNet.setRemote(g_hostAddr, g_hostPort);
     }
 
