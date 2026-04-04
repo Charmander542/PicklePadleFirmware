@@ -32,6 +32,8 @@ static JerkDetector gJerk;
 static NetUdp gNet;
 static WifiPortal gPortal;
 static bool s_imuReady = false;
+/** After STA connect, show IP until UE sends UDP `idle` (UiEvent::ModeIdle). */
+static bool s_showPaddleIpUntilUeIdle = true;
 
 static bool imuBeginAdafruit() {
     I2cBusLock lk;
@@ -80,7 +82,18 @@ static void bootLogf(const char *fmt, ...) {
     bootLog(buf);
 }
 
-static void renderIdleUi() { gDisp.showTwoLines("Idle", "Ready"); }
+static void renderIdleUi() {
+    if (s_showPaddleIpUntilUeIdle && WiFi.status() == WL_CONNECTED) {
+        const IPAddress ip = WiFi.localIP();
+        if (ip != IPAddress(0, 0, 0, 0)) {
+            char line2[22];
+            snprintf(line2, sizeof(line2), "%s", ip.toString().c_str());
+            gDisp.showTwoLines("Paddle IP", line2);
+            return;
+        }
+    }
+    gDisp.showTwoLines("Idle", "Ready");
+}
 
 static void drainUiEvents() {
     UiEventMsg ev;
@@ -95,6 +108,7 @@ static void drainUiEvents() {
             break;
         case UiEvent::ModeIdle:
             if (SdLogger::instance().ok()) SdLogger::instance().log("mode: idle");
+            s_showPaddleIpUntilUeIdle = false;
             setRunMode(RunMode::Idle);
             renderIdleUi();
             break;
@@ -224,6 +238,17 @@ static void bootProbeSequence() {
         }
     }
 
+    // Wire bus recovery: the BNO055 init above generates many i2cWriteReadNonStop Error -1
+    // which can leave the ESP32 Wire peripheral in a bad state. Re-init the bus so the haptic
+    // scan talks to a clean peripheral.
+    {
+        I2cBusLock lk;
+        Wire.begin(BUS_SDA, BUS_SCL);
+        Wire.setClock(100000);
+        Wire.setTimeOut(200);
+        delay(10);
+    }
+
     const int hCount = gMux.scanDrivers();
     if (hCount == 0) {
         gDisp.showTwoLines("Haptics", "# of haptic found: 0 [X]");
@@ -233,6 +258,11 @@ static void bootProbeSequence() {
         gDisp.showTwoLines("Haptics", line);
     }
     bootLogf("probe haptics count=%d", hCount);
+    if (hCount > 0) {
+        gDisp.showTwoLines("Haptics", "Testing each motor...");
+        bootLog("haptics: sequential startup test (one mux branch at a time)");
+        gMux.bootSequenceVibrate();
+    }
 
     const bool spkOk = gSpk.probe(SPEAKER_PWM, SPEAKER_LEDC_CHAN, SPEAKER_LEDC_BITS);
     gDisp.showTwoLines("Speaker", spkOk ? "ok" : "unable to connect Speaker [X]");
@@ -293,6 +323,7 @@ void setup() {
     gDisp.showTwoLines("Connecting...", ssid.c_str());
 
     if (!gPortal.connectSta(&gDisp, &gStrip)) {
+        s_showPaddleIpUntilUeIdle = false;
         gDisp.showTwoLines("WiFi", "Unable to connect to wifi. [X]");
         if (SdLogger::instance().ok()) SdLogger::instance().log("wifi: connect FAILED");
         delay(2500);

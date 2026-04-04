@@ -16,13 +16,14 @@ struct HapticStep {
 };
 
 static const HapticStep kFxBootHaptic[] = {
-    {0, 47, 280}, {0, 1, 200}, {0, 14, 320},
+    {HapticMux::kAllHapticChannels, 47, 280}, {HapticMux::kAllHapticChannels, 1, 200},
+    {HapticMux::kAllHapticChannels, 14, 320},
 };
 static const HapticStep kFxBallHitHaptic[] = {
-    {0, 47, 150}, {0, 14, 200},
+    {HapticMux::kAllHapticChannels, 47, 150}, {HapticMux::kAllHapticChannels, 14, 200},
 };
 static const HapticStep kFxMenuTick[] = {
-    {0, 1, 120},
+    {HapticMux::kAllHapticChannels, 1, 120},
 };
 
 inline void paddleFx_playSteps(HapticMux &mux, const HapticStep *steps, size_t count) {

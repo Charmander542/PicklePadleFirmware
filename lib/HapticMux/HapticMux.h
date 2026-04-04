@@ -6,6 +6,9 @@
 
 class HapticMux {
 public:
+    /** Use in `HapticStep::channel` to run the effect on every mux branch that has a DRV2605. */
+    static constexpr uint8_t kAllHapticChannels = 0xFF;
+
     void beginWire(int sdaPin, int sclPin, uint32_t clockHz = 100000);
 
     bool probeMux(uint8_t tcaAddr);
@@ -26,18 +29,23 @@ public:
 
     void bootSequenceVibrate();
 
-    // Short strong pulse on first available DRV channel (host “swing hit”).
+    // Short strong pulse on first available DRV channel (host "swing hit").
     void playHitFeedback();
 
 private:
     bool i2cPresent_(uint8_t addr);
     uint8_t detectDrvAddr_();
     bool initDrvOnSelectedChannel_();
-    bool writeTca_(uint8_t tcaAddr, uint8_t channel);
+    void muxSelectCh_(uint8_t channel);
+    void muxDisable_();
+    void wireRestore_();
 
     Adafruit_DRV2605 drv_{};
     uint8_t tcaAddr_{0x70};
+    int sdaPin_{-1};
+    int sclPin_{-1};
     bool hasMux_{false};
+    bool drvReady_{false};
     bool hasDrv_[8]{};
     uint8_t drvAddr_[8]{};
 };
