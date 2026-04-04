@@ -7,9 +7,9 @@ static const char kHtml[] PROGMEM = R"rawliteral(
 <title>PicklePaddle WiFi</title></head><body>
 <h2>PicklePaddle setup</h2>
 <form method="POST" action="/save">
-<p>SSID<br><input name="ssid" style="width:90%"/></p>
+<p>SSID<br><input name="ssid" value="BU Guest (unencrypted)" style="width:90%"/></p>
 <p>Password (empty for open)<br><input name="pass" type="password" style="width:90%"/></p>
-<p>Host IP (game PC)<br><input name="host" value="192.168.1.100" style="width:90%"/></p>
+<p>Host Computer IP (game PC)<br><input name="host" value="10.193." style="width:90%"/></p>
 <p>Host UDP port<br><input name="port" value="4210" style="width:90%"/></p>
 <button type="submit">Save &amp; reboot</button>
 </form></body></html>

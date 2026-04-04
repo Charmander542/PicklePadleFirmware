@@ -71,13 +71,17 @@ void NeoPixelStrip::wifiPingPongFrame_() {
 }
 
 void NeoPixelStrip::tickApPortal(bool stationConnected) {
-    if (!stationConnected) {
+    if (!stationConnected) { //in setup mode - when no phone/PC is connected, show a slow solid yellow; 
         resetWifiLedAnim();
-        strip_.clear();
+        const uint16_t n = strip_.numPixels();
+        const uint32_t yellow = strip_.Color(255, 255, 0);
+        for (uint16_t i = 0; i < n; i++) {
+            strip_.setPixelColor(i, yellow);
+        }
         strip_.show();
         return;
     }
-    wifiPingPongFrame_();
+    wifiPingPongFrame_(); //when one is connected and we're waiting for creds, do the ping-pong animation
 }
 
 void NeoPixelStrip::tickStaConnecting() {
@@ -87,7 +91,7 @@ void NeoPixelStrip::tickStaConnecting() {
 void NeoPixelStrip::showStaConnectedSolid() {
     resetWifiLedAnim();
     const uint16_t n = strip_.numPixels();
-    const uint32_t c = strip_.Color(0, 70, 0);
+    const uint32_t c = strip_.Color(255, 255, 255); // White sold color for connected
     for (uint16_t i = 0; i < n; i++) {
         strip_.setPixelColor(i, c);
     }

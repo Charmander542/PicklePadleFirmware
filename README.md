@@ -32,7 +32,7 @@ You can use either the **CLI** or **VS Code**.
 
 ### Windows note: paths with spaces
 
-ESP-IDF tooling used by this project can fail if PlatformIO’s packages live under a user folder with **spaces** (for example `C:\Users\First Last\`). This repo sets **`core_dir = C:/.platformio`** in **`platformio.ini`** so tools install on **`C:\.platformio`**. Create that folder if needed; the first build may download a fair amount of data.
+ESP-IDF tooling used by this project can fail if PlatformIO’s packages live under a user folder with **spaces** (for example `C:\Users\First Last\`). On Windows, this repo used to set **`core_dir = C:/.platformio`** in **`platformio.ini`** so tools install on **`C:\.platformio`**. On macOS, leave `core_dir` unset and use PlatformIO’s default install location (typically `~/.platformio`).
 
 ---
 

@@ -15,13 +15,39 @@ inline void fxClear(Adafruit_NeoPixel &strip) {
 }
 
 inline void fxNeoBootChase(Adafruit_NeoPixel &strip) {
-    const uint32_t c = fxColor(0, 80, 40);
-    for (int i = 0; i < (int)strip.numPixels(); i++) {
-        strip.clear();
-        strip.setPixelColor(i, c);
+    const uint16_t numPixels = strip.numPixels();
+    const uint32_t purple = fxColor(128, 0, 128);  // Purple color
+    const int steps = 50;  // Number of fade steps
+    const int delayMs = 1000 / (steps * 2);  // Total 1 second for fade on + fade off
+
+    // Fade on
+    for (int step = 0; step < steps; step++) {
+        uint8_t brightness = (step * 255) / (steps - 1);
+        for (uint16_t i = 0; i < numPixels; i++) {
+            strip.setPixelColor(i, strip.Color(
+                (brightness * 128) / 255,  // Red
+                0,                         // Green
+                (brightness * 128) / 255   // Blue
+            ));
+        }
         strip.show();
-        delay(35);
+        delay(delayMs);
     }
+
+    // Fade off
+    for (int step = steps - 1; step >= 0; step--) {
+        uint8_t brightness = (step * 255) / (steps - 1);
+        for (uint16_t i = 0; i < numPixels; i++) {
+            strip.setPixelColor(i, strip.Color(
+                (brightness * 128) / 255,  // Red
+                0,                         // Green
+                (brightness * 128) / 255   // Blue
+            ));
+        }
+        strip.show();
+        delay(delayMs);
+    }
+
     strip.clear();
     strip.show();
 }
