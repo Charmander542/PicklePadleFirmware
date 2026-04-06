@@ -65,6 +65,19 @@ static void imuReadLinear(Vec3 *out) {
     Wire.setClock(kImuI2cHz);
 }
 
+/** Euler angles in degrees (BNO055: heading, roll, pitch). */
+static void imuReadEuler(Vec3 *out) {
+    I2cBusLock lk;
+    gMux.disableMuxBranches();
+    Wire.setTimeOut(kImuWireTimeoutMs);
+    Wire.setClock(kImuReadClockHz);
+    imu::Vector<3> ev = gBno.getVector(Adafruit_BNO055::VECTOR_EULER);
+    out->x = (float)ev.x();
+    out->y = (float)ev.y();
+    out->z = (float)ev.z();
+    Wire.setClock(kImuI2cHz);
+}
+
 /** Always prints to Serial; mirrors to SD when the logger mounted successfully. */
 static void bootLog(const char *line) {
     Serial.println(line);
@@ -118,6 +131,15 @@ static void drainUiEvents() {
             gJerk.reset();
             gDisp.showTwoLines("Mode", "Gameplay");
             break;
+        case UiEvent::ModeTutorial:
+            if (SdLogger::instance().ok()) SdLogger::instance().log("mode: tutorial");
+            setRunMode(RunMode::Tutorial);
+            gJerk.reset();
+            gDisp.showTwoLines("Mode", "Tutorial");
+            Serial.println("rot_x,rot_y,rot_z,button,impulse");
+            if (SdLogger::instance().ok())
+                SdLogger::instance().log("csv_hdr rot_x,rot_y,rot_z,button,impulse");
+            break;
         }
     }
 }
@@ -140,7 +162,7 @@ static void pollButton(RunMode mode) {
         } else {
             if (!holdSent && (now - tDown) >= kButtonHoldMs) {
                 holdSent = true;
-                gNet.postText("detect btn hold");
+                if (mode != RunMode::Tutorial) gNet.postText("detect btn hold");
             }
             if (mode == RunMode::Idle && (now - tDown) >= kWifiForgetHoldMs && !wifiForgetArmed) {
                 wifiForgetArmed = true;
@@ -159,7 +181,7 @@ static void pollButton(RunMode mode) {
         if (down) {
             const uint32_t elapsed = now - tDown;
             if (!holdSent && elapsed >= kButtonDebounceMs && elapsed < kButtonHoldMs) {
-                gNet.postText("detect btn push");
+                if (mode != RunMode::Tutorial) gNet.postText("detect btn push");
             }
         }
         down = false;
@@ -178,22 +200,38 @@ static void appTask(void * /*param*/) {
         const RunMode mode = getRunMode();
         pollButton(mode);
 
-        if (mode == RunMode::Gameplay && s_imuReady) {
+        if (s_imuReady && (mode == RunMode::Gameplay || mode == RunMode::Tutorial)) {
             const uint32_t now = millis();
             if (now - lastImu >= kImuPeriodMs) {
                 lastImu = now;
                 Vec3 a;
                 imuReadLinear(&a);
-                if (gJerk.update(a, now)) {
+                if (mode == RunMode::Gameplay) {
+                    if (gJerk.update(a, now)) {
+                        const float j = gJerk.lastJerkMagnitude();
+                        Serial.printf(
+                            "[imu] tx linear_accel m/s^2 x=%.3f y=%.3f z=%.3f  jerk=%.1f m/s^3\n",
+                            a.x, a.y, a.z, j);
+                        char buf[48];
+                        snprintf(buf, sizeof(buf), "%.1f", j);
+                        if (SdLogger::instance().ok())
+                            SdLogger::instance().logf("impulse tx %s", buf);
+                        gNet.postText(buf);
+                    }
+                } else {
+                    (void)gJerk.update(a, now);
                     const float j = gJerk.lastJerkMagnitude();
-                    Serial.printf(
-                        "[imu] tx linear_accel m/s^2 x=%.3f y=%.3f z=%.3f  jerk=%.1f m/s^3\n",
-                        a.x, a.y, a.z, j);
-                    char buf[48];
-                    snprintf(buf, sizeof(buf), "%.1f", j);
-                    if (SdLogger::instance().ok())
-                        SdLogger::instance().logf("impulse tx %s", buf);
-                    gNet.postText(buf);
+                    const float impulseCol =
+                        (j >= kGameplayJerkThreshold) ? j : 0.f;
+                    Vec3 e{};
+                    imuReadEuler(&e);
+                    const int btn =
+                        (digitalRead(BUTTON_PIN) == HIGH) ? 1 : 0;
+                    char line[96];
+                    snprintf(line, sizeof(line), "%.3f,%.3f,%.3f,%d,%.3f", e.x, e.y, e.z, btn,
+                             impulseCol);
+                    Serial.println(line);
+                    gNet.postText(line);
                 }
             }
         }

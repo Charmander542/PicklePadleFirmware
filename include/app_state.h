@@ -6,12 +6,13 @@
 #include <freertos/semphr.h>
 #include <IPAddress.h>
 
-enum class RunMode : uint8_t { Idle = 0, Gameplay = 1 };
+enum class RunMode : uint8_t { Idle = 0, Gameplay = 1, Tutorial = 2 };
 
 enum class UiEvent : uint8_t {
   SwingHitHost,
   ModeIdle,
   ModeGameplay,
+  ModeTutorial,
 };
 
 struct UiEventMsg {

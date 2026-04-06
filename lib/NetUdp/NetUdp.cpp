@@ -81,6 +81,9 @@ void NetUdp::service() {
             } else if (strcasecmp(buf, "gameplay") == 0 || strcasecmp(buf, "game") == 0) {
                 ev.kind = UiEvent::ModeGameplay;
                 xQueueSend(g_uiEventQueue, &ev, 0);
+            } else if (strcasecmp(buf, "tutorial") == 0) {
+                ev.kind = UiEvent::ModeTutorial;
+                xQueueSend(g_uiEventQueue, &ev, 0);
             }
         }
     }
