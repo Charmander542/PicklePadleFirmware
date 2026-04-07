@@ -28,6 +28,21 @@ static wifi_power_t mapDbmToWifiPower_(int8_t dbm) {
     return WIFI_POWER_19_5dBm;
 }
 
+static void rampWifiTxPower_(int8_t startDbm, int8_t targetDbm, uint32_t stepDelayMs) {
+    static const int8_t kLevels[] = {2, 5, 7, 8, 11, 13, 15, 17, 18, 19};
+    int8_t from = startDbm;
+    if (from > targetDbm) {
+        from = targetDbm;
+    }
+    for (size_t i = 0; i < sizeof(kLevels) / sizeof(kLevels[0]); ++i) {
+        const int8_t level = kLevels[i];
+        if (level < from) continue;
+        if (level > targetDbm) break;
+        WiFi.setTxPower(mapDbmToWifiPower_(level));
+        delay(stepDelayMs);
+    }
+}
+
 void WifiPortal::handleRoot_() {
     server_.send_P(200, "text/html", kHtml);
 }
@@ -149,8 +164,7 @@ bool WifiPortal::connectSta(DisplayManager *disp, NeoPixelStrip *leds) {
 
     const bool ok = WiFi.status() == WL_CONNECTED;
     if (ok) {
-        delay(kWifiPowerRampDelayMs);
-        WiFi.setTxPower(mapDbmToWifiPower_(kWifiRunTxPowerDbm));
+        rampWifiTxPower_(kWifiConnectTxPowerDbm, kWifiRunTxPowerDbm, kWifiPowerRampStepDelayMs);
     }
     if (!ok && leds) {
         leds->resetWifiLedAnim();

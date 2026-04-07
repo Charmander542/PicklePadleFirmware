@@ -20,8 +20,8 @@
 
 // SD card (SPI)
 #define SD_CS GPIO_NUM_15
-#define SD_MOSI GPIO_NUM_12 // 27 for the ESP32 Dev Module 12 for PCB
-#define SD_MISO GPIO_NUM_13
+#define SD_MOSI GPIO_NUM_13 // 27 for the ESP32 Dev Module 13 for PCB
+#define SD_MISO GPIO_NUM_12
 #define SD_CLK GPIO_NUM_14
 
 // NeoPixel strip (data pin). Count / brightness: tweak in include/paddle_fx.h

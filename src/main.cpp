@@ -338,9 +338,10 @@ void setup() {
     // Run UI / I2C probes before SD: no card must not block or reset before the display test.
     bootProbeSequence();
 
-    if (!SdLogger::instance().begin()) {
+    if (!SdLogger::instance().begin(kSdLogPath)) {
         SdLogger::serialPrintln("[boot] SD unavailable — continuing without file logging.");
     } else {
+        SdLogger::serialPrintf("[boot] SD log path: %s\n", SdLogger::instance().path());
         const esp_reset_reason_t rr = esp_reset_reason();
         SdLogger::serialPrintf("[boot] reset reason: %d (brownout=%d)\n", (int)rr,
                                (int)(rr == ESP_RST_BROWNOUT));
@@ -369,7 +370,7 @@ void setup() {
         delay(2500);
     } else {
         // Keep modem sleep enabled through connect/ramp to avoid a second current step.
-        delay(kWifiPowerRampDelayMs);
+        delay(kWifiPowerRampStepDelayMs);
         WiFi.setSleep(false);  // modem sleep can starve I2C / CPU timing under load
         gStrip.showStaConnectedSolid();
         char line[44];
