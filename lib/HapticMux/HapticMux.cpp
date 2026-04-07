@@ -1,5 +1,6 @@
 #include "HapticMux.h"
 #include "i2c_bus_lock.h"
+#include "SdLogger.h"
 
 void HapticMux::beginWire(int sdaPin, int sclPin, uint32_t clockHz) {
     sdaPin_ = sdaPin;
@@ -53,13 +54,13 @@ bool HapticMux::probeMux(uint8_t tcaAddr) {
     for (int attempt = 0; attempt < 3; attempt++) {
         if (i2cPresent_(tcaAddr)) {
             hasMux_ = true;
-            Serial.printf("[haptic] TCA9548A found at 0x%02X\r\n", tcaAddr);
+            SdLogger::serialPrintf("[haptic] TCA9548A found at 0x%02X\r\n", tcaAddr);
             return true;
         }
         delay(5);
     }
     hasMux_ = false;
-    Serial.printf("[haptic] TCA9548A NOT found at 0x%02X (will still scan all channels)\r\n", tcaAddr);
+    SdLogger::serialPrintf("[haptic] TCA9548A NOT found at 0x%02X (will still scan all channels)\r\n", tcaAddr);
     return false;
 }
 
@@ -92,15 +93,15 @@ int HapticMux::scanDrivers() {
     delay(5);
     uint8_t addr = detectDrvAddr_();
     if (addr) {
-        Serial.printf("[haptic] DRV on main bus at 0x%02X\r\n", addr);
+        SdLogger::serialPrintf("[haptic] DRV on main bus at 0x%02X\r\n", addr);
         drvAddr_[0] = addr;
         if (initDrvOnSelectedChannel_()) {
             hasDrv_[0] = true;
-            Serial.println("[haptic] DRV init OK on main bus → ch0");
+            SdLogger::serialPrintln("[haptic] DRV init OK on main bus → ch0");
             muxDisable_();
             return 1;
         }
-        Serial.println("[haptic] DRV init FAILED on main bus");
+        SdLogger::serialPrintln("[haptic] DRV init FAILED on main bus");
         drvAddr_[0] = 0;
     }
 
@@ -110,19 +111,19 @@ int HapticMux::scanDrivers() {
         muxSelectCh_(ch);
         addr = detectDrvAddr_();
         if (!addr) continue;
-        Serial.printf("[haptic] mux ch%u → DRV at 0x%02X", ch, addr);
+        SdLogger::serialPrintf("[haptic] mux ch%u → DRV at 0x%02X", ch, addr);
         drvAddr_[ch] = addr;
         if (!initDrvOnSelectedChannel_()) {
-            Serial.println(" init FAILED");
+            SdLogger::serialPrintln(" init FAILED");
             drvAddr_[ch] = 0;
             continue;
         }
         hasDrv_[ch] = true;
         found++;
-        Serial.println(" init OK");
+        SdLogger::serialPrintln(" init OK");
     }
     muxDisable_();
-    Serial.printf("[haptic] scan complete: %d DRV(s) found\r\n", found);
+    SdLogger::serialPrintf("[haptic] scan complete: %d DRV(s) found\r\n", found);
     return found;
 }
 
@@ -135,7 +136,7 @@ void HapticMux::vibrate(uint8_t channel, uint8_t effect, uint16_t msDelay) {
         // The DRV keeps its register state across mux switches.
         if (!drvReady_) {
             if (!initDrvOnSelectedChannel_()) {
-                Serial.printf("[haptic] vibrate ch%u: DRV init failed\r\n", ch);
+                SdLogger::serialPrintf("[haptic] vibrate ch%u: DRV init failed\r\n", ch);
                 muxDisable_();
                 return false;
             }
@@ -173,12 +174,12 @@ void HapticMux::bootSequenceVibrate() {
     wireRestore_();
     for (uint8_t ch = 0; ch < 8; ch++) {
         if (!hasDrv_[ch]) continue;
-        Serial.printf("[haptic] boot test ch%u (0x%02X)\r\n", ch, drvAddr_[ch]);
+        SdLogger::serialPrintf("[haptic] boot test ch%u (0x%02X)\r\n", ch, drvAddr_[ch]);
         for (uint8_t p : pattern) {
             muxSelectCh_(ch);
             if (!drvReady_) {
                 if (!initDrvOnSelectedChannel_()) {
-                    Serial.printf("[haptic] boot ch%u init failed\r\n", ch);
+                    SdLogger::serialPrintf("[haptic] boot ch%u init failed\r\n", ch);
                     muxDisable_();
                     continue;
                 }

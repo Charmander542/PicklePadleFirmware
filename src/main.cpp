@@ -3,6 +3,7 @@
 #include <Preferences.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <esp_system.h>
 
 #include "pins.h"
 #include "i2c_bus_lock.h"
@@ -80,10 +81,7 @@ static void imuReadEuler(Vec3 *out) {
 
 /** Always prints to Serial; mirrors to SD when the logger mounted successfully. */
 static void bootLog(const char *line) {
-    Serial.println(line);
-    if (SdLogger::instance().ok()) {
-        SdLogger::instance().log(line);
-    }
+    SdLogger::serialPrintln(line);
 }
 
 static void bootLogf(const char *fmt, ...) {
@@ -136,7 +134,7 @@ static void drainUiEvents() {
             setRunMode(RunMode::Tutorial);
             gJerk.reset();
             gDisp.showTwoLines("Mode", "Tutorial");
-            Serial.println("rot_x,rot_y,rot_z,button,impulse");
+            SdLogger::serialPrintln("rot_x,rot_y,rot_z,button,impulse");
             if (SdLogger::instance().ok())
                 SdLogger::instance().log("csv_hdr rot_x,rot_y,rot_z,button,impulse");
             break;
@@ -167,7 +165,7 @@ static void pollButton(RunMode mode) {
             if (mode == RunMode::Idle && (now - tDown) >= kWifiForgetHoldMs && !wifiForgetArmed) {
                 wifiForgetArmed = true;
                 gDisp.showTwoLines("WiFi setup", "Forgetting...");
-                Serial.println("[prefs] Clearing Wi-Fi credentials — rebooting to setup portal.");
+                SdLogger::serialPrintln("[prefs] Clearing Wi-Fi credentials — rebooting to setup portal.");
                 Preferences prefs;
                 prefs.begin(kPrefsNamespace, false);
                 prefs.remove(kPrefsKeySsid);
@@ -209,7 +207,7 @@ static void appTask(void * /*param*/) {
                 if (mode == RunMode::Gameplay) {
                     if (gJerk.update(a, now)) {
                         const float j = gJerk.lastJerkMagnitude();
-                        Serial.printf(
+                        SdLogger::serialPrintf(
                             "[imu] tx linear_accel m/s^2 x=%.3f y=%.3f z=%.3f  jerk=%.1f m/s^3\n",
                             a.x, a.y, a.z, j);
                         char buf[48];
@@ -230,7 +228,7 @@ static void appTask(void * /*param*/) {
                     char line[96];
                     snprintf(line, sizeof(line), "%.3f,%.3f,%.3f,%d,%.3f", e.x, e.y, e.z, btn,
                              impulseCol);
-                    Serial.println(line);
+                    SdLogger::serialPrintln(line);
                     gNet.postText(line);
                 }
             }
@@ -328,20 +326,24 @@ void setup() {
     gMux.beginWire(BUS_SDA, BUS_SCL, 100000);
 
     if (!gMux.probeMux(TCA9548A_ADDR)) {
-        Serial.println(
+        SdLogger::serialPrintln(
             "[I2C] TCA9548A not detected by probe; still driving 0x70 for haptic channels.");
     }
     gMux.disableMuxBranches();
 
     if (!gDisp.begin()) {
-        Serial.println("OLED (0.91) init failed.");
+        SdLogger::serialPrintln("OLED (0.91) init failed.");
     }
 
     // Run UI / I2C probes before SD: no card must not block or reset before the display test.
     bootProbeSequence();
 
     if (!SdLogger::instance().begin()) {
-        Serial.println("[boot] SD unavailable — continuing without file logging.");
+        SdLogger::serialPrintln("[boot] SD unavailable — continuing without file logging.");
+    } else {
+        const esp_reset_reason_t rr = esp_reset_reason();
+        SdLogger::serialPrintf("[boot] reset reason: %d (brownout=%d)\n", (int)rr,
+                               (int)(rr == ESP_RST_BROWNOUT));
     }
 
     Preferences prefs;
@@ -366,6 +368,8 @@ void setup() {
         if (SdLogger::instance().ok()) SdLogger::instance().log("wifi: connect FAILED");
         delay(2500);
     } else {
+        // Keep modem sleep enabled through connect/ramp to avoid a second current step.
+        delay(kWifiPowerRampDelayMs);
         WiFi.setSleep(false);  // modem sleep can starve I2C / CPU timing under load
         gStrip.showStaConnectedSolid();
         char line[44];
@@ -377,7 +381,7 @@ void setup() {
     }
 
     if (!gNet.begin(kLocalUdpPort)) {
-        Serial.println("UDP begin failed");
+        SdLogger::serialPrintln("UDP begin failed");
         if (SdLogger::instance().ok()) SdLogger::instance().log("udp: begin FAILED");
     } else if (SdLogger::instance().ok()) {
         SdLogger::instance().logf("udp: listen port %u", (unsigned)kLocalUdpPort);

@@ -19,6 +19,8 @@ public:
 
     void log(const char *line);
     void logf(const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+    static void serialPrintln(const char *line);
+    static void serialPrintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 private:
     SdLogger() = default;

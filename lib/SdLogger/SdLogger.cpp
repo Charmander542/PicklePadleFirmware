@@ -216,3 +216,20 @@ void SdLogger::logf(const char *fmt, ...) {
     va_end(ap);
     log(buf);
 }
+
+void SdLogger::serialPrintln(const char *line) {
+    if (!line) return;
+    Serial.println(line);
+    SdLogger::instance().log(line);
+}
+
+void SdLogger::serialPrintf(const char *fmt, ...) {
+    if (!fmt) return;
+    char buf[240];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    Serial.print(buf);
+    SdLogger::instance().log(buf);
+}

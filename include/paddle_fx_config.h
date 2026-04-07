@@ -3,7 +3,7 @@
 #pragma once
 
 #ifndef PADDLEFX_NEO_COUNT
-#define PADDLEFX_NEO_COUNT 8u
+#define PADDLEFX_NEO_COUNT 18u
 #endif
 #ifndef PADDLEFX_NEO_BRIGHTNESS
 #define PADDLEFX_NEO_BRIGHTNESS 32u

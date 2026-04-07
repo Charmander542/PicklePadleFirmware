@@ -5,6 +5,7 @@
 #include "OLED_Driver.h"
 #include "GUI_Paint.h"
 #include "fonts.h"
+#include "SdLogger.h"
 #include <Wire.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,14 +51,14 @@ bool DisplayManager::begin() {
     } else if (i2cAck(OLED_I2C_ADDR_ALT)) {
         oledAddr = OLED_I2C_ADDR_ALT;
     } else {
-        Serial.printf(
+        SdLogger::serialPrintf(
             "[OLED] No I2C ACK at 0x%02X / 0x%02X on main bus (SDA/SCL wiring / addr).\r\n",
             (unsigned)OLED_I2C_ADDR, (unsigned)OLED_I2C_ADDR_ALT);
         mux_.disableMuxBranches();
         return false;
     }
     DEV_SetOledI2CAddr(oledAddr);
-    Serial.printf("[OLED] Using I2C 0x%02X (128x32 SSD1306, main bus)\r\n", (unsigned)oledAddr);
+    SdLogger::serialPrintf("[OLED] Using I2C 0x%02X (128x32 SSD1306, main bus)\r\n", (unsigned)oledAddr);
 
     System_Init();
 
