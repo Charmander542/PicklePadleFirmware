@@ -15,34 +15,6 @@ static const char kHtml[] PROGMEM = R"rawliteral(
 </form></body></html>
 )rawliteral";
 
-static wifi_power_t mapDbmToWifiPower_(int8_t dbm) {
-    if (dbm <= 2) return WIFI_POWER_2dBm;
-    if (dbm <= 5) return WIFI_POWER_5dBm;
-    if (dbm <= 7) return WIFI_POWER_7dBm;
-    if (dbm <= 8) return WIFI_POWER_8_5dBm;
-    if (dbm <= 11) return WIFI_POWER_11dBm;
-    if (dbm <= 13) return WIFI_POWER_13dBm;
-    if (dbm <= 15) return WIFI_POWER_15dBm;
-    if (dbm <= 17) return WIFI_POWER_17dBm;
-    if (dbm <= 18) return WIFI_POWER_18_5dBm;
-    return WIFI_POWER_19_5dBm;
-}
-
-static void rampWifiTxPower_(int8_t startDbm, int8_t targetDbm, uint32_t stepDelayMs) {
-    static const int8_t kLevels[] = {2, 5, 7, 8, 11, 13, 15, 17, 18, 19};
-    int8_t from = startDbm;
-    if (from > targetDbm) {
-        from = targetDbm;
-    }
-    for (size_t i = 0; i < sizeof(kLevels) / sizeof(kLevels[0]); ++i) {
-        const int8_t level = kLevels[i];
-        if (level < from) continue;
-        if (level > targetDbm) break;
-        WiFi.setTxPower(mapDbmToWifiPower_(level));
-        delay(stepDelayMs);
-    }
-}
-
 void WifiPortal::handleRoot_() {
     server_.send_P(200, "text/html", kHtml);
 }
@@ -127,8 +99,6 @@ bool WifiPortal::connectSta(DisplayManager *disp, NeoPixelStrip *leds) {
     WiFi.persistent(false);
     WiFi.setAutoReconnect(true);
     WiFi.setSleep(true);  // lower instantaneous draw during association
-    WiFi.setTxPower(mapDbmToWifiPower_(kWifiConnectTxPowerDbm));
-    delay(40);
     WiFi.begin(ssid.c_str(), pass.c_str());
 
     uint32_t start = millis();
@@ -150,8 +120,6 @@ bool WifiPortal::connectSta(DisplayManager *disp, NeoPixelStrip *leds) {
         if (leds) {
             leds->resetWifiLedAnim();
         }
-        WiFi.setTxPower(mapDbmToWifiPower_(kWifiConnectTxPowerDbm));
-        delay(40);
         WiFi.begin(kFallbackSsid);
         start = millis();
         while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
@@ -163,9 +131,6 @@ bool WifiPortal::connectSta(DisplayManager *disp, NeoPixelStrip *leds) {
     }
 
     const bool ok = WiFi.status() == WL_CONNECTED;
-    if (ok) {
-        rampWifiTxPower_(kWifiConnectTxPowerDbm, kWifiRunTxPowerDbm, kWifiPowerRampStepDelayMs);
-    }
     if (!ok && leds) {
         leds->resetWifiLedAnim();
         leds->clear();

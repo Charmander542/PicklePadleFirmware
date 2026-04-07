@@ -79,6 +79,7 @@ static void imuReadEuler(Vec3 *out) {
     Wire.setClock(kImuI2cHz);
 }
 
+#if !PICKLE_PRODUCTION
 /** Always prints to Serial; mirrors to SD when the logger mounted successfully. */
 static void bootLog(const char *line) {
     SdLogger::serialPrintln(line);
@@ -92,6 +93,7 @@ static void bootLogf(const char *fmt, ...) {
     va_end(ap);
     bootLog(buf);
 }
+#endif
 
 static void renderIdleUi() {
     if (s_showPaddleIpUntilUeIdle && WiFi.status() == WL_CONNECTED) {
@@ -125,12 +127,14 @@ static void drainUiEvents() {
             break;
         case UiEvent::ModeGameplay:
             if (SdLogger::instance().ok()) SdLogger::instance().log("mode: gameplay");
+            gJerk.configure(kGameplayJerkThreshold, kGameplayJerkRetriggerMs, 0.2f);
             setRunMode(RunMode::Gameplay);
             gJerk.reset();
             gDisp.showTwoLines("Mode", "Gameplay");
             break;
         case UiEvent::ModeTutorial:
             if (SdLogger::instance().ok()) SdLogger::instance().log("mode: tutorial");
+            gJerk.configure(kTutorialJerkThreshold, kTutorialJerkRetriggerMs, kTutorialJerkLpfAlpha);
             setRunMode(RunMode::Tutorial);
             gJerk.reset();
             gDisp.showTwoLines("Mode", "Tutorial");
@@ -200,7 +204,9 @@ static void appTask(void * /*param*/) {
 
         if (s_imuReady && (mode == RunMode::Gameplay || mode == RunMode::Tutorial)) {
             const uint32_t now = millis();
-            if (now - lastImu >= kImuPeriodMs) {
+            const uint32_t imuPeriodMs =
+                (mode == RunMode::Tutorial) ? kTutorialImuPeriodMs : kGameplayImuPeriodMs;
+            if (now - lastImu >= imuPeriodMs) {
                 lastImu = now;
                 Vec3 a;
                 imuReadLinear(&a);
@@ -217,10 +223,10 @@ static void appTask(void * /*param*/) {
                         gNet.postText(buf);
                     }
                 } else {
-                    (void)gJerk.update(a, now);
+                    const bool trig = gJerk.update(a, now);
                     const float j = gJerk.lastJerkMagnitude();
                     const float impulseCol =
-                        (j >= kGameplayJerkThreshold) ? j : 0.f;
+                        (trig || j >= kTutorialJerkThreshold) ? j : 0.f;
                     Vec3 e{};
                     imuReadEuler(&e);
                     const int btn =
@@ -245,7 +251,32 @@ static void netTask(void * /*param*/) {
     }
 }
 
+static void bootPlayStartupFx() {
+#if !PICKLE_PRODUCTION
+    gDisp.showTwoLines("Device initialized.", "Startup FX...");
+    bootLog("boot: startup FX");
+#endif
+    paddleFx_playSteps(gMux, kFxBootHaptic, PADDLE_FX_STEP_COUNT(kFxBootHaptic));
+    paddleFx_playSpeakerSteps(gSpk, kFxBootSpeaker, PADDLE_FX_SPEAKER_COUNT(kFxBootSpeaker));
+    gStrip.playBootSequence();
+}
+
 static void bootProbeSequence() {
+#if PICKLE_PRODUCTION
+    (void)gStrip.begin();
+    gMux.disableMuxBranches();
+    delay(30);
+    s_imuReady = imuBeginAdafruit();
+    {
+        I2cBusLock lk;
+        Wire.begin(BUS_SDA, BUS_SCL);
+        Wire.setClock(100000);
+        Wire.setTimeOut(200);
+        delay(10);
+    }
+    (void)gMux.scanDrivers();
+    (void)gSpk.probe(SPEAKER_PWM, SPEAKER_LEDC_CHAN, SPEAKER_LEDC_BITS);
+#else
     gDisp.showTwoLines("Initializing Device...", "");
     bootLog("boot: start probes");
 
@@ -303,13 +334,8 @@ static void bootProbeSequence() {
     const bool spkOk = gSpk.probe(SPEAKER_PWM, SPEAKER_LEDC_CHAN, SPEAKER_LEDC_BITS);
     gDisp.showTwoLines("Speaker", spkOk ? "ok" : "unable to connect Speaker [X]");
     bootLogf("probe speaker %s", spkOk ? "ok" : "FAIL");
-
-    gDisp.showTwoLines("Device initialized.", "Startup FX...");
-    bootLog("boot: startup FX");
-
-    paddleFx_playSteps(gMux, kFxBootHaptic, PADDLE_FX_STEP_COUNT(kFxBootHaptic));
-    paddleFx_playSpeakerSteps(gSpk, kFxBootSpeaker, PADDLE_FX_SPEAKER_COUNT(kFxBootSpeaker));
-    gStrip.playBootSequence();
+#endif
+    bootPlayStartupFx();
 }
 
 void setup() {
@@ -321,7 +347,8 @@ void setup() {
 
     g_stateMutex = xSemaphoreCreateMutex();
     g_uiEventQueue = xQueueCreate(16, sizeof(UiEventMsg));
-    g_netTxQueue = xQueueCreate(40, sizeof(NetOutgoingMsg));
+    // Tutorial streams ~80 CSV rows/s; give headroom so postText rarely times out.
+    g_netTxQueue = xQueueCreate(96, sizeof(NetOutgoingMsg));
 
     gMux.beginWire(BUS_SDA, BUS_SCL, 100000);
 
@@ -369,8 +396,6 @@ void setup() {
         if (SdLogger::instance().ok()) SdLogger::instance().log("wifi: connect FAILED");
         delay(2500);
     } else {
-        // Keep modem sleep enabled through connect/ramp to avoid a second current step.
-        delay(kWifiPowerRampStepDelayMs);
         WiFi.setSleep(false);  // modem sleep can starve I2C / CPU timing under load
         gStrip.showStaConnectedSolid();
         char line[44];

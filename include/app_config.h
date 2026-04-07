@@ -9,6 +9,12 @@
 #define ENABLE_SD_FILE_LOG 1
 #endif
 
+// Production: skip OLED self-test, skip boot probe UI / IMU sampling / per-motor haptic test; minimal
+// hardware init then boot FX only. Use PlatformIO env `esp32dev_prod` or `-D PICKLE_PRODUCTION=1`.
+#ifndef PICKLE_PRODUCTION
+#define PICKLE_PRODUCTION 0
+#endif
+
 // Default / fallback Wi‑Fi (open guest networks use empty password).
 constexpr char kFallbackSsid[] = "BU Guest (unencrypted)";
 
@@ -26,12 +32,6 @@ constexpr uint16_t kDefaultHostPort = 4210;
 constexpr uint16_t kLocalUdpPort = 4211;
 constexpr char kSdLogPath[] = "/PADDLE.LOG";  // 8.3 filename required by current FatFs config
 
-// Wi-Fi power shaping: start association at low TX power to reduce brownout risk,
-// then raise once connected.
-constexpr int8_t kWifiConnectTxPowerDbm = 2;   // minimum practical power for association
-constexpr int8_t kWifiRunTxPowerDbm = 15;      // normal runtime power
-constexpr uint32_t kWifiPowerRampStepDelayMs = 700;
-
 // BNO055: SA0 low → 0x28, SA0 high → 0x29 (Adafruit “address B”). Your working sketch used 0x29.
 constexpr uint8_t kBno055I2cAddr = 0x29;
 
@@ -45,8 +45,9 @@ constexpr uint32_t kImuReadClockHz = 50000;
 // Wire combined write+read timeout (ms) per transaction while reading the IMU.
 constexpr uint16_t kImuWireTimeoutMs = 1000;
 
-// IMU / gameplay poll interval (ms). Slower polling eases I2C + WiFi contention while debugging.
-constexpr uint32_t kImuPeriodMs = 50;
+// IMU poll intervals (ms).
+constexpr uint32_t kGameplayImuPeriodMs = 50;
+constexpr uint32_t kTutorialImuPeriodMs = 12;  // much faster stream for tuning/capture
 
 // Button timing (ms).
 constexpr uint32_t kButtonDebounceMs = 45;
@@ -56,6 +57,12 @@ constexpr uint32_t kWifiForgetHoldMs = 8000;
 
 // Gameplay: jerk threshold (m/s^3). Production ballpark is often ~1e3–1e4; lowered a lot for bench testing
 // (tap the paddle gently). Raise before shipping.
-constexpr float kGameplayJerkThreshold = 10.f;
+constexpr float kGameplayJerkThreshold = 25.f;
 // Minimum ms between transmitted impulses (debounce).
 constexpr uint32_t kGameplayJerkRetriggerMs = 350;
+
+// Tutorial streams IMU faster (kTutorialImuPeriodMs): shorter Δt makes |Δa|/Δt smaller per step with the
+// same LPF, so use a more responsive filter, lower threshold, and shorter re-arm for the CSV impulse column.
+constexpr float kTutorialJerkThreshold = 8.f;
+constexpr uint32_t kTutorialJerkRetriggerMs = 120;
+constexpr float kTutorialJerkLpfAlpha = 0.45f;

@@ -1,5 +1,6 @@
 #include "DisplayManager.h"
 
+#include "app_config.h"
 #include "i2c_bus_lock.h"
 #include "DEV_Config.h"
 #include "OLED_Driver.h"
@@ -81,7 +82,12 @@ bool DisplayManager::begin() {
 
     Paint_NewImage(canvas_, OLED_0in91_HEIGHT, OLED_0in91_WIDTH, 90, BLACK);
     Paint_SelectImage(canvas_);
+#if PICKLE_PRODUCTION
+    Paint_Clear(BLACK);
+    OLED_0in91_Display(canvas_);
+#else
     runInitSelfTest_();
+#endif
 
     ok_ = true;
     mux_.disableMuxBranches();
