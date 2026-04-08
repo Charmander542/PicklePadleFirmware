@@ -396,6 +396,8 @@ void setup() {
         if (SdLogger::instance().ok()) SdLogger::instance().log("wifi: connect FAILED");
         delay(2500);
     } else {
+        // Let modem sleep + low TX stay through connect/ramp before another current step.
+        delay(kWifiPowerRampStepDelayMs);
         WiFi.setSleep(false);  // modem sleep can starve I2C / CPU timing under load
         gStrip.showStaConnectedSolid();
         char line[44];

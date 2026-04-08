@@ -32,6 +32,11 @@ constexpr uint16_t kDefaultHostPort = 4210;
 constexpr uint16_t kLocalUdpPort = 4211;
 constexpr char kSdLogPath[] = "/PADDLE.LOG";  // 8.3 filename required by current FatFs config
 
+// Wi‑Fi power shaping: low TX power during association (reduces peak current / brownout risk), then ramp up.
+constexpr int8_t kWifiConnectTxPowerDbm = 2;
+constexpr int8_t kWifiRunTxPowerDbm = 15;
+constexpr uint32_t kWifiPowerRampStepDelayMs = 700;
+
 // BNO055: SA0 low → 0x28, SA0 high → 0x29 (Adafruit “address B”). Your working sketch used 0x29.
 constexpr uint8_t kBno055I2cAddr = 0x29;
 
