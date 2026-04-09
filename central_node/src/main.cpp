@@ -30,6 +30,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <esp_wifi.h>
 #include <Preferences.h>
 #include <string.h>
 #include <stdio.h>
@@ -124,6 +125,7 @@ static void unregisterPeer(uint8_t id) {
     Serial.printf("[cn] unregistered node %u\n", (unsigned)id);
 }
 
+// node 0 = E0:8C:FE:91:09:3C
 // ─── ESP-NOW callbacks ────────────────────────────────────────────────────────
 
 static void onSend(const uint8_t * /*mac*/, esp_now_send_status_t status) {
@@ -285,6 +287,10 @@ void setup() {
     // Initialise ESP-NOW — WiFi STA mode, no AP connection.
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+    // Disable modem sleep for lower command latency.
+    if (esp_wifi_set_ps(WIFI_PS_NONE) != ESP_OK) {
+        Serial.println("[cn] failed to disable WiFi power save");
+    }
 
     if (esp_now_init() != ESP_OK) {
         Serial.println("[cn] ESP-NOW init FAILED — halting.");

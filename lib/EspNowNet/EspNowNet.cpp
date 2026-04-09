@@ -1,6 +1,7 @@
 #include "EspNowNet.h"
 
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <SdLogger.h>
 #include <string.h>
 #include <freertos/task.h>
@@ -20,6 +21,10 @@ bool EspNowNet::begin(uint8_t nodeId) {
     // ESP-NOW requires the Wi-Fi radio to be up, but we never associate to an AP.
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+    // Disable modem sleep to reduce ESP-NOW command latency.
+    if (esp_wifi_set_ps(WIFI_PS_NONE) != ESP_OK) {
+        SdLogger::serialPrintln("[espnow] failed to disable WiFi power save");
+    }
 
     if (esp_now_init() != ESP_OK) {
         SdLogger::serialPrintln("[espnow] init FAILED");
@@ -102,20 +107,24 @@ void EspNowNet::onRecv_(const uint8_t * /*mac*/, const uint8_t *data, int len) {
     int r = static_cast<int>(strlen(buf));
     while (r > 0 && (buf[r - 1] == '\n' || buf[r - 1] == '\r')) buf[--r] = '\0';
 
-    if (SdLogger::instance().ok()) SdLogger::instance().logf("espnow rx: %s", buf);
-
     UiEventMsg ev{};
     if (strcasecmp(buf, "swing hit") == 0) {
         ev.kind = UiEvent::SwingHitHost;
         xQueueSend(g_uiEventQueue, &ev, 0);
+        return;
     } else if (strcasecmp(buf, "idle") == 0) {
         ev.kind = UiEvent::ModeIdle;
         xQueueSend(g_uiEventQueue, &ev, 0);
+        return;
     } else if (strcasecmp(buf, "gameplay") == 0 || strcasecmp(buf, "game") == 0) {
         ev.kind = UiEvent::ModeGameplay;
         xQueueSend(g_uiEventQueue, &ev, 0);
+        return;
     } else if (strcasecmp(buf, "tutorial") == 0) {
         ev.kind = UiEvent::ModeTutorial;
         xQueueSend(g_uiEventQueue, &ev, 0);
+        return;
     }
+
+    if (SdLogger::instance().ok()) SdLogger::instance().logf("espnow rx: %s", buf);
 }

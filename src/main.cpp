@@ -237,14 +237,16 @@ static void appTask(void * /*param*/) {
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(4));
+        // Keep command->action latency low while still yielding CPU.
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
 static void netTask(void * /*param*/) {
     for (;;) {
         gNet.service();
-        vTaskDelay(pdMS_TO_TICKS(2));
+        // Fast service cadence keeps network TX queue drain snappy.
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
