@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Arduino.h>
-#include <IPAddress.h>
 
 // File logging on SPI SD. Some boards hang in SD.begin() with an empty socket or floating MISO.
 // Build with -D ENABLE_SD_FILE_LOG=0 in platformio.ini to skip all SD/SPI touch (no boot loop).
@@ -9,42 +8,27 @@
 #define ENABLE_SD_FILE_LOG 1
 #endif
 
-// Production: skip OLED self-test, skip boot probe UI / IMU sampling / per-motor haptic test; minimal
-// hardware init then boot FX only. Use PlatformIO env `esp32dev_prod` or `-D PICKLE_PRODUCTION=1`.
+// Production: skip OLED self-test, skip boot probe UI / IMU sampling / per-motor haptic test;
+// minimal hardware init then boot FX only. Use PlatformIO env `esp32dev_prod` or -D PICKLE_PRODUCTION=1.
 #ifndef PICKLE_PRODUCTION
 #define PICKLE_PRODUCTION 0
 #endif
 
-// Default / fallback Wi‑Fi (open guest networks use empty password).
-constexpr char kFallbackSsid[] = "BU Guest (unencrypted)";
+// NVS namespace shared by all node preferences.
+constexpr char kPrefsNamespace[]  = "paddle";
+// uint8 — each paddle's unique address (0-254). 0xFF is reserved for broadcast / central.
+constexpr char kPrefsKeyNodeId[]  = "node_id";
 
-// Captive portal AP (when no credentials in NVS).
-constexpr char kPortalSsid[] = "PicklePaddle-Setup";
-constexpr char kPortalPass[] = "";  // open AP for easier setup
-
-constexpr char kPrefsNamespace[] = "paddle";
-constexpr char kPrefsKeySsid[] = "wifi_ssid";
-constexpr char kPrefsKeyPass[] = "wifi_pass";
-constexpr char kPrefsKeyHostIp[] = "host_ip";
-constexpr char kPrefsKeyHostPort[] = "host_port";
-
-constexpr uint16_t kDefaultHostPort = 4210;
-constexpr uint16_t kLocalUdpPort = 4211;
 constexpr char kSdLogPath[] = "/PADDLE.LOG";  // 8.3 filename required by current FatFs config
 
-// Wi‑Fi power shaping: low TX power during association (reduces peak current / brownout risk), then ramp up.
-constexpr int8_t kWifiConnectTxPowerDbm = 2;
-constexpr int8_t kWifiRunTxPowerDbm = 15;
-constexpr uint32_t kWifiPowerRampStepDelayMs = 700;
-
-// BNO055: SA0 low → 0x28, SA0 high → 0x29 (Adafruit “address B”). Your working sketch used 0x29.
+// BNO055: SA0 low → 0x28, SA0 high → 0x29 (Adafruit "address B"). Your working sketch used 0x29.
 constexpr uint8_t kBno055I2cAddr = 0x29;
 
 // IMU I2C clock (Hz) for the bus when not in a dedicated slow read (default / other devices).
 constexpr uint32_t kImuI2cHz = 100000;
 
 // Slower clock during BNO055 linear-accel reads — cuts ESP32 Wire error 263 (ESP_ERR_TIMEOUT)
-// when WiFi + clock-stretch contend.
+// when the radio + clock-stretch contend.
 constexpr uint32_t kImuReadClockHz = 50000;
 
 // Wire combined write+read timeout (ms) per transaction while reading the IMU.
@@ -56,18 +40,18 @@ constexpr uint32_t kTutorialImuPeriodMs = 12;  // much faster stream for tuning/
 
 // Button timing (ms).
 constexpr uint32_t kButtonDebounceMs = 45;
-constexpr uint32_t kButtonHoldMs = 650;
-// Idle only: hold this long to erase saved Wi‑Fi and reboot into setup portal (PicklePaddle-Setup).
-constexpr uint32_t kWifiForgetHoldMs = 8000;
+constexpr uint32_t kButtonHoldMs     = 650;
+// Idle only: hold this long to reset stored node_id to 0 and reboot.
+constexpr uint32_t kNodeIdResetHoldMs = 8000;
 
-// Gameplay: jerk threshold (m/s^3). Production ballpark is often ~1e3–1e4; lowered a lot for bench testing
-// (tap the paddle gently). Raise before shipping.
+// Gameplay: jerk threshold (m/s^3). Production ballpark is often ~1e3–1e4; lowered for bench
+// testing (tap the paddle gently). Raise before shipping.
 constexpr float kGameplayJerkThreshold = 25.f;
 // Minimum ms between transmitted impulses (debounce).
 constexpr uint32_t kGameplayJerkRetriggerMs = 350;
 
-// Tutorial streams IMU faster (kTutorialImuPeriodMs): shorter Δt makes |Δa|/Δt smaller per step with the
-// same LPF, so use a more responsive filter, lower threshold, and shorter re-arm for the CSV impulse column.
-constexpr float kTutorialJerkThreshold = 8.f;
+// Tutorial streams IMU faster (kTutorialImuPeriodMs): shorter Δt makes |Δa|/Δt smaller per step
+// with the same LPF, so use a more responsive filter, lower threshold, and shorter re-arm.
+constexpr float    kTutorialJerkThreshold   = 8.f;
 constexpr uint32_t kTutorialJerkRetriggerMs = 120;
-constexpr float kTutorialJerkLpfAlpha = 0.45f;
+constexpr float    kTutorialJerkLpfAlpha    = 0.45f;

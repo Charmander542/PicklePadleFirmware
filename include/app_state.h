@@ -4,37 +4,31 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
-#include <IPAddress.h>
 
 enum class RunMode : uint8_t { Idle = 0, Gameplay = 1, Tutorial = 2 };
 
 enum class UiEvent : uint8_t {
-  SwingHitHost,
-  ModeIdle,
-  ModeGameplay,
-  ModeTutorial,
+    SwingHitHost,
+    ModeIdle,
+    ModeGameplay,
+    ModeTutorial,
 };
 
 struct UiEventMsg {
-  UiEvent kind;
+    UiEvent kind;
 };
 
+// Outgoing text messages queued by any task, drained by the network task.
 struct NetOutgoingMsg {
-  char text[96];
+    char text[96];
 };
 
-// Globals wired in main — network task pushes UiEventMsg; app task consumes.
-extern QueueHandle_t g_uiEventQueue;
-extern QueueHandle_t g_netTxQueue;
+// FreeRTOS handles wired in main.cpp.
+extern QueueHandle_t     g_uiEventQueue;  // net task → app task
+extern QueueHandle_t     g_netTxQueue;    // app task → net task
 extern SemaphoreHandle_t g_stateMutex;
 
 extern RunMode g_runMode;
 
-extern IPAddress g_hostAddr;
-extern uint16_t g_hostPort;
-
-bool hostAddrLoadFromPrefs();
-void hostAddrSaveToPrefs(const IPAddress &ip, uint16_t port);
-
-void setRunMode(RunMode m);
+void    setRunMode(RunMode m);
 RunMode getRunMode();

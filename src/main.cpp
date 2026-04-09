@@ -1,5 +1,4 @@
 #include <Arduino.h>
-#include <WiFi.h>
 #include <Preferences.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -20,21 +19,19 @@
 #include <SpeakerDriver.h>
 #include <HapticMux.h>
 #include <DisplayManager.h>
-#include <WifiPortal.h>
-#include <NetUdp.h>
+#include <EspNowNet.h>
 #include <SdLogger.h>
 
-static NeoPixelStrip gStrip;
-static SpeakerDriver gSpk;
-static HapticMux gMux;
-static DisplayManager gDisp(gMux);
-static Adafruit_BNO055 gBno(55, kBno055I2cAddr);
-static JerkDetector gJerk;
-static NetUdp gNet;
-static WifiPortal gPortal;
-static bool s_imuReady = false;
-/** After STA connect, show IP until UE sends UDP `idle` (UiEvent::ModeIdle). */
-static bool s_showPaddleIpUntilUeIdle = true;
+static NeoPixelStrip    gStrip;
+static SpeakerDriver    gSpk;
+static HapticMux        gMux;
+static DisplayManager   gDisp(gMux);
+static Adafruit_BNO055  gBno(55, kBno055I2cAddr);
+static JerkDetector     gJerk;
+static EspNowNet        gNet;
+static bool             s_imuReady = false;
+
+// ─── IMU helpers ──────────────────────────────────────────────────────────────
 
 static bool imuBeginAdafruit() {
     I2cBusLock lk;
@@ -50,7 +47,7 @@ static bool imuBeginAdafruit() {
     delay(100);
     gBno.setExtCrystalUse(true);
     Wire.setClock(kImuI2cHz);
-    Wire.setTimeOut(kImuWireTimeoutMs);  // 263 on Wire = ESP_ERR_TIMEOUT; avoid under WiFi
+    Wire.setTimeOut(kImuWireTimeoutMs);  // 263 on Wire = ESP_ERR_TIMEOUT; avoid under radio load
     return true;
 }
 
@@ -79,8 +76,9 @@ static void imuReadEuler(Vec3 *out) {
     Wire.setClock(kImuI2cHz);
 }
 
+// ─── Debug log helpers (dev builds only) ─────────────────────────────────────
+
 #if !PICKLE_PRODUCTION
-/** Always prints to Serial; mirrors to SD when the logger mounted successfully. */
 static void bootLog(const char *line) {
     SdLogger::serialPrintln(line);
 }
@@ -95,18 +93,15 @@ static void bootLogf(const char *fmt, ...) {
 }
 #endif
 
+// ─── UI rendering ─────────────────────────────────────────────────────────────
+
 static void renderIdleUi() {
-    if (s_showPaddleIpUntilUeIdle && WiFi.status() == WL_CONNECTED) {
-        const IPAddress ip = WiFi.localIP();
-        if (ip != IPAddress(0, 0, 0, 0)) {
-            char line2[22];
-            snprintf(line2, sizeof(line2), "%s", ip.toString().c_str());
-            gDisp.showTwoLines("Paddle IP", line2);
-            return;
-        }
-    }
-    gDisp.showTwoLines("Idle", "Ready");
+    char line2[22];
+    snprintf(line2, sizeof(line2), "Node ID: %u", (unsigned)gNet.nodeId());
+    gDisp.showTwoLines("Idle", line2);
 }
+
+// ─── UI event dispatch ────────────────────────────────────────────────────────
 
 static void drainUiEvents() {
     UiEventMsg ev;
@@ -121,7 +116,6 @@ static void drainUiEvents() {
             break;
         case UiEvent::ModeIdle:
             if (SdLogger::instance().ok()) SdLogger::instance().log("mode: idle");
-            s_showPaddleIpUntilUeIdle = false;
             setRunMode(RunMode::Idle);
             renderIdleUi();
             break;
@@ -146,34 +140,36 @@ static void drainUiEvents() {
     }
 }
 
-static void pollButton(RunMode mode) {
-    static bool down = false;
-    static uint32_t tDown = 0;
-    static bool holdSent = false;
-    static bool wifiForgetArmed = false;
+// ─── Button polling ───────────────────────────────────────────────────────────
 
-    const bool raw = (digitalRead(BUTTON_PIN) == LOW);
+static void pollButton(RunMode mode) {
+    static bool     down      = false;
+    static uint32_t tDown     = 0;
+    static bool     holdSent  = false;
+    static bool     resetArmed = false;
+
+    const bool     raw = (digitalRead(BUTTON_PIN) == LOW);
     const uint32_t now = millis();
 
     if (raw) {
         if (!down) {
-            down = true;
-            tDown = now;
-            holdSent = false;
-            wifiForgetArmed = false;
+            down       = true;
+            tDown      = now;
+            holdSent   = false;
+            resetArmed = false;
         } else {
             if (!holdSent && (now - tDown) >= kButtonHoldMs) {
                 holdSent = true;
                 if (mode != RunMode::Tutorial) gNet.postText("detect btn hold");
             }
-            if (mode == RunMode::Idle && (now - tDown) >= kWifiForgetHoldMs && !wifiForgetArmed) {
-                wifiForgetArmed = true;
-                gDisp.showTwoLines("WiFi setup", "Forgetting...");
-                SdLogger::serialPrintln("[prefs] Clearing Wi-Fi credentials — rebooting to setup portal.");
+            // Idle only: long-hold resets node_id to 0 and reboots.
+            if (mode == RunMode::Idle && (now - tDown) >= kNodeIdResetHoldMs && !resetArmed) {
+                resetArmed = true;
+                gDisp.showTwoLines("Node ID", "Resetting to 0...");
+                SdLogger::serialPrintln("[prefs] Clearing node_id — rebooting.");
                 Preferences prefs;
                 prefs.begin(kPrefsNamespace, false);
-                prefs.remove(kPrefsKeySsid);
-                prefs.remove(kPrefsKeyPass);
+                prefs.remove(kPrefsKeyNodeId);
                 prefs.end();
                 delay(400);
                 ESP.restart();
@@ -186,11 +182,13 @@ static void pollButton(RunMode mode) {
                 if (mode != RunMode::Tutorial) gNet.postText("detect btn push");
             }
         }
-        down = false;
-        holdSent = false;
-        wifiForgetArmed = false;
+        down       = false;
+        holdSent   = false;
+        resetArmed = false;
     }
 }
+
+// ─── FreeRTOS tasks ───────────────────────────────────────────────────────────
 
 static void appTask(void * /*param*/) {
     gJerk.configure(kGameplayJerkThreshold, kGameplayJerkRetriggerMs, 0.2f);
@@ -223,17 +221,16 @@ static void appTask(void * /*param*/) {
                         gNet.postText(buf);
                     }
                 } else {
-                    const bool trig = gJerk.update(a, now);
-                    const float j = gJerk.lastJerkMagnitude();
+                    const bool  trig = gJerk.update(a, now);
+                    const float j    = gJerk.lastJerkMagnitude();
                     const float impulseCol =
                         (trig || j >= kTutorialJerkThreshold) ? j : 0.f;
                     Vec3 e{};
                     imuReadEuler(&e);
-                    const int btn =
-                        (digitalRead(BUTTON_PIN) == HIGH) ? 1 : 0;
+                    const int btn = (digitalRead(BUTTON_PIN) == HIGH) ? 1 : 0;
                     char line[96];
-                    snprintf(line, sizeof(line), "%.3f,%.3f,%.3f,%d,%.3f", e.x, e.y, e.z, btn,
-                             impulseCol);
+                    snprintf(line, sizeof(line), "%.3f,%.3f,%.3f,%d,%.3f",
+                             e.x, e.y, e.z, btn, impulseCol);
                     SdLogger::serialPrintln(line);
                     gNet.postText(line);
                 }
@@ -250,6 +247,8 @@ static void netTask(void * /*param*/) {
         vTaskDelay(pdMS_TO_TICKS(2));
     }
 }
+
+// ─── Boot sequence helpers ────────────────────────────────────────────────────
 
 static void bootPlayStartupFx() {
 #if !PICKLE_PRODUCTION
@@ -338,6 +337,8 @@ static void bootProbeSequence() {
     bootPlayStartupFx();
 }
 
+// ─── Arduino entry points ─────────────────────────────────────────────────────
+
 void setup() {
     Serial.begin(115200);
     delay(200);
@@ -345,10 +346,10 @@ void setup() {
     i2cBusMutexInit();
     pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-    g_stateMutex = xSemaphoreCreateMutex();
+    g_stateMutex  = xSemaphoreCreateMutex();
     g_uiEventQueue = xQueueCreate(16, sizeof(UiEventMsg));
     // Tutorial streams ~80 CSV rows/s; give headroom so postText rarely times out.
-    g_netTxQueue = xQueueCreate(96, sizeof(NetOutgoingMsg));
+    g_netTxQueue   = xQueueCreate(96, sizeof(NetOutgoingMsg));
 
     gMux.beginWire(BUS_SDA, BUS_SCL, 100000);
 
@@ -362,7 +363,7 @@ void setup() {
         SdLogger::serialPrintln("OLED (0.91) init failed.");
     }
 
-    // Run UI / I2C probes before SD: no card must not block or reset before the display test.
+    // Hardware probes (display, IMU, haptics, speaker) before SD.
     bootProbeSequence();
 
     if (!SdLogger::instance().begin(kSdLogPath)) {
@@ -374,48 +375,26 @@ void setup() {
                                (int)(rr == ESP_RST_BROWNOUT));
     }
 
+    // Load this paddle's node ID from NVS (default 0 if not set).
     Preferences prefs;
     prefs.begin(kPrefsNamespace, true);
-    const String ssid = prefs.getString(kPrefsKeySsid, "");
+    const uint8_t nodeId = prefs.getUChar(kPrefsKeyNodeId, 0);
     prefs.end();
+    SdLogger::serialPrintf("[boot] node_id=%u\n", (unsigned)nodeId);
 
-    if (ssid.length() == 0) {
-        gDisp.showTwoLines("WiFi setup", "AP: PicklePaddle-Setup");
-        gPortal.runBlockingSetupPortal(&gDisp, &gStrip);
-        delay(200);
-        ESP.restart();
-    }
-
-    hostAddrLoadFromPrefs();
-
-    gDisp.showTwoLines("Connecting...", ssid.c_str());
-
-    if (!gPortal.connectSta(&gDisp, &gStrip)) {
-        s_showPaddleIpUntilUeIdle = false;
-        gDisp.showTwoLines("WiFi", "Unable to connect to wifi. [X]");
-        if (SdLogger::instance().ok()) SdLogger::instance().log("wifi: connect FAILED");
+    // Initialise ESP-NOW (sets WiFi STA mode — no AP connection needed).
+    gDisp.showTwoLines("ESP-NOW", "Initializing...");
+    if (!gNet.begin(nodeId)) {
+        gDisp.showTwoLines("ESP-NOW", "Init FAILED [X]");
+        if (SdLogger::instance().ok()) SdLogger::instance().log("espnow: init FAILED");
         delay(2500);
     } else {
-        // Let modem sleep + low TX stay through connect/ramp before another current step.
-        delay(kWifiPowerRampStepDelayMs);
-        WiFi.setSleep(false);  // modem sleep can starve I2C / CPU timing under load
-        gStrip.showStaConnectedSolid();
-        char line[44];
-        snprintf(line, sizeof(line), "IP: %s", WiFi.localIP().toString().c_str());
-        gDisp.showTwoLines("Wifi Connected.", line);
+        char line[22];
+        snprintf(line, sizeof(line), "Node ID: %u", (unsigned)nodeId);
+        gDisp.showTwoLines("ESP-NOW Ready", line);
         if (SdLogger::instance().ok())
-            SdLogger::instance().logf("wifi: ok %s", WiFi.localIP().toString().c_str());
+            SdLogger::instance().logf("espnow: ready node_id=%u", (unsigned)nodeId);
         delay(800);
-    }
-
-    if (!gNet.begin(kLocalUdpPort)) {
-        SdLogger::serialPrintln("UDP begin failed");
-        if (SdLogger::instance().ok()) SdLogger::instance().log("udp: begin FAILED");
-    } else if (SdLogger::instance().ok()) {
-        SdLogger::instance().logf("udp: listen port %u", (unsigned)kLocalUdpPort);
-    }
-    if (g_hostAddr != IPAddress(0, 0, 0, 0) && g_hostPort != 0) {
-        gNet.setRemote(g_hostAddr, g_hostPort);
     }
 
     setRunMode(RunMode::Idle);
