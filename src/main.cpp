@@ -251,8 +251,9 @@ static void appTask(void * /*param*/) {
                 lastImu = now;
                 Vec3 a;
                 imuReadLinear(&a);
+                const uint32_t nowUs = micros();
                 if (mode == RunMode::Gameplay) {
-                    if (gJerk.update(a, now)) {
+                    if (gJerk.update(a, nowUs)) {
                         const float j = gJerk.lastJerkMagnitude();
                         SdLogger::serialPrintf(
                             "[imu] tx linear_accel m/s^2 x=%.3f y=%.3f z=%.3f  jerk=%.1f m/s^3\n",
@@ -266,7 +267,7 @@ static void appTask(void * /*param*/) {
                         }
                     }
                 } else {
-                    const bool trig = gJerk.update(a, now);
+                    const bool trig = gJerk.update(a, nowUs);
                     const float j = gJerk.lastJerkMagnitude();
                     const float impulseCol =
                         (trig || j >= kTutorialJerkThreshold) ? j : 0.f;
@@ -391,8 +392,8 @@ void setup() {
 
     g_stateMutex = xSemaphoreCreateMutex();
     g_uiEventQueue = xQueueCreate(16, sizeof(UiEventMsg));
-    // Tutorial streams ~80 CSV rows/s; give headroom so postText rarely times out.
-    g_netTxQueue = xQueueCreate(96, sizeof(NetOutgoingMsg));
+    // Tutorial can stream ~150+ rows/s; larger queue so postText rarely times out under load.
+    g_netTxQueue = xQueueCreate(160, sizeof(NetOutgoingMsg));
 
     gMux.beginWire(BUS_SDA, BUS_SCL, 100000);
 
