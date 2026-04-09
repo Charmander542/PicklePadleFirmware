@@ -26,6 +26,10 @@ bool NetUdp::postText(const char *msg) {
     return xQueueSend(g_netTxQueue, &m, pdMS_TO_TICKS(20)) == pdTRUE;
 }
 
+bool NetUdp::trySendImmediate(const char *msg) {
+    return sendNowUnlocked_(msg);
+}
+
 bool NetUdp::sendNowUnlocked_(const char *msg) {
     if (!msg || msg[0] == 0) return false;
     if (WiFi.status() != WL_CONNECTED) return false;
@@ -69,8 +73,6 @@ void NetUdp::service() {
             buf[r] = 0;
             while (r > 0 && (buf[r - 1] == '\n' || buf[r - 1] == '\r')) buf[--r] = 0;
 
-            if (SdLogger::instance().ok()) SdLogger::instance().logf("udp rx: %s", buf);
-
             UiEventMsg ev{};
             if (strcasecmp(buf, "swing hit") == 0) {
                 ev.kind = UiEvent::SwingHitHost;
@@ -85,6 +87,8 @@ void NetUdp::service() {
                 ev.kind = UiEvent::ModeTutorial;
                 xQueueSend(g_uiEventQueue, &ev, 0);
             }
+
+            if (SdLogger::instance().ok()) SdLogger::instance().logf("udp rx: %s", buf);
         }
     }
 

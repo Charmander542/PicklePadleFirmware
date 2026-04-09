@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <Preferences.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -35,6 +36,43 @@ static WifiPortal gPortal;
 static bool s_imuReady = false;
 /** After STA connect, show IP until UE sends UDP `idle` (UiEvent::ModeIdle). */
 static bool s_showPaddleIpUntilUeIdle = true;
+
+static wifi_power_t mapDbmToWifiPower(int8_t dbm) {
+    if (dbm <= 2) return WIFI_POWER_2dBm;
+    if (dbm <= 5) return WIFI_POWER_5dBm;
+    if (dbm <= 7) return WIFI_POWER_7dBm;
+    if (dbm <= 8) return WIFI_POWER_8_5dBm;
+    if (dbm <= 11) return WIFI_POWER_11dBm;
+    if (dbm <= 13) return WIFI_POWER_13dBm;
+    if (dbm <= 15) return WIFI_POWER_15dBm;
+    if (dbm <= 17) return WIFI_POWER_17dBm;
+    if (dbm <= 18) return WIFI_POWER_18_5dBm;
+    return WIFI_POWER_19_5dBm;
+}
+
+/** Highest throughput / range for UDP streaming (gameplay & tutorial). AP must support HT40 for 40 MHz. */
+static void applyWifiStreamingBoost() {
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    WiFi.setSleep(false);
+    WiFi.setTxPower(mapDbmToWifiPower(kWifiStreamingTxPowerDbm));
+    (void)esp_wifi_set_ps(WIFI_PS_NONE);
+    (void)esp_wifi_set_protocol(WIFI_IF_STA,
+                                WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+    if (esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT40) != ESP_OK) {
+        (void)esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
+    }
+}
+
+/** Restore calmer radio when returning to idle (saves power / neighbor-friendlier than HT40). */
+static void applyWifiIdleRadio() {
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    WiFi.setSleep(false);
+    WiFi.setTxPower(mapDbmToWifiPower(kWifiRunTxPowerDbm));
+    (void)esp_wifi_set_ps(WIFI_PS_NONE);
+    (void)esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
+}
 
 static bool imuBeginAdafruit() {
     I2cBusLock lk;
@@ -123,13 +161,15 @@ static void drainUiEvents() {
             if (SdLogger::instance().ok()) SdLogger::instance().log("mode: idle");
             s_showPaddleIpUntilUeIdle = false;
             setRunMode(RunMode::Idle);
+            applyWifiIdleRadio();
             renderIdleUi();
             break;
         case UiEvent::ModeGameplay:
             if (SdLogger::instance().ok()) SdLogger::instance().log("mode: gameplay");
-            gJerk.configure(kGameplayJerkThreshold, kGameplayJerkRetriggerMs, 0.2f);
+            gJerk.configure(kGameplayJerkThreshold, kGameplayJerkRetriggerMs, kGameplayJerkLpfAlpha);
             setRunMode(RunMode::Gameplay);
             gJerk.reset();
+            applyWifiStreamingBoost();
             gDisp.showTwoLines("Mode", "Gameplay");
             break;
         case UiEvent::ModeTutorial:
@@ -137,6 +177,7 @@ static void drainUiEvents() {
             gJerk.configure(kTutorialJerkThreshold, kTutorialJerkRetriggerMs, kTutorialJerkLpfAlpha);
             setRunMode(RunMode::Tutorial);
             gJerk.reset();
+            applyWifiStreamingBoost();
             gDisp.showTwoLines("Mode", "Tutorial");
             SdLogger::serialPrintln("rot_x,rot_y,rot_z,button,impulse");
             if (SdLogger::instance().ok())
@@ -193,7 +234,7 @@ static void pollButton(RunMode mode) {
 }
 
 static void appTask(void * /*param*/) {
-    gJerk.configure(kGameplayJerkThreshold, kGameplayJerkRetriggerMs, 0.2f);
+    gJerk.configure(kGameplayJerkThreshold, kGameplayJerkRetriggerMs, kGameplayJerkLpfAlpha);
     uint32_t lastImu = 0;
 
     for (;;) {
@@ -220,7 +261,9 @@ static void appTask(void * /*param*/) {
                         snprintf(buf, sizeof(buf), "%.1f", j);
                         if (SdLogger::instance().ok())
                             SdLogger::instance().logf("impulse tx %s", buf);
-                        gNet.postText(buf);
+                        if (!gNet.trySendImmediate(buf)) {
+                            gNet.postText(buf);
+                        }
                     }
                 } else {
                     const bool trig = gJerk.update(a, now);
@@ -240,14 +283,15 @@ static void appTask(void * /*param*/) {
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(4));
+        // 1 tick ≈ minimal yield; IMU work is gated by imuPeriodMs (matches ~20 ms loop sketches).
+        vTaskDelay(1);
     }
 }
 
 static void netTask(void * /*param*/) {
     for (;;) {
         gNet.service();
-        vTaskDelay(pdMS_TO_TICKS(2));
+        vTaskDelay(1);
     }
 }
 
@@ -423,8 +467,8 @@ void setup() {
 
     constexpr uint32_t kNetStack = 8192;
     constexpr uint32_t kAppStack = 10240;
-    xTaskCreatePinnedToCore(netTask, "net", kNetStack, nullptr, 1, nullptr, 0);
-    xTaskCreatePinnedToCore(appTask, "app", kAppStack, nullptr, 1, nullptr, 1);
+    xTaskCreatePinnedToCore(netTask, "net", kNetStack, nullptr, kNetTaskPriority, nullptr, 0);
+    xTaskCreatePinnedToCore(appTask, "app", kAppStack, nullptr, kAppTaskPriority, nullptr, 1);
 }
 
 void loop() {

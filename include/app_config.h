@@ -32,9 +32,16 @@ constexpr uint16_t kDefaultHostPort = 4210;
 constexpr uint16_t kLocalUdpPort = 4211;
 constexpr char kSdLogPath[] = "/PADDLE.LOG";  // 8.3 filename required by current FatFs config
 
+// FreeRTOS: IMU / UI task should preempt UDP housekeeping (closer to a single fast loop()).
+constexpr uint8_t kAppTaskPriority = 5;
+constexpr uint8_t kNetTaskPriority  = 3;
+
 // Wi‑Fi power shaping: low TX power during association (reduces peak current / brownout risk), then ramp up.
 constexpr int8_t kWifiConnectTxPowerDbm = 2;
+// Default STA TX after connect (idle / low duty). Gameplay & tutorial bump to kWifiStreamingTxPowerDbm.
 constexpr int8_t kWifiRunTxPowerDbm = 15;
+// Max practical STA TX for streaming modes (hardware clamps to chipset max, typically ~19.5 dBm on ESP32).
+constexpr int8_t kWifiStreamingTxPowerDbm = 19;
 constexpr uint32_t kWifiPowerRampStepDelayMs = 700;
 
 // BNO055: SA0 low → 0x28, SA0 high → 0x29 (Adafruit “address B”). Your working sketch used 0x29.
@@ -51,7 +58,7 @@ constexpr uint32_t kImuReadClockHz = 50000;
 constexpr uint16_t kImuWireTimeoutMs = 1000;
 
 // IMU poll intervals (ms).
-constexpr uint32_t kGameplayImuPeriodMs = 50;
+constexpr uint32_t kGameplayImuPeriodMs = 20;  // faster sampling → quicker impulse detection (was 50).
 constexpr uint32_t kTutorialImuPeriodMs = 12;  // much faster stream for tuning/capture
 
 // Button timing (ms).
@@ -64,7 +71,9 @@ constexpr uint32_t kWifiForgetHoldMs = 8000;
 // (tap the paddle gently). Raise before shipping.
 constexpr float kGameplayJerkThreshold = 25.f;
 // Minimum ms between transmitted impulses (debounce).
-constexpr uint32_t kGameplayJerkRetriggerMs = 350;
+constexpr uint32_t kGameplayJerkRetriggerMs = 160;
+// Higher = IMU filter tracks sudden accel faster (0.01–1). Gameplay uses a snappier filter than before (0.2).
+constexpr float kGameplayJerkLpfAlpha = 0.42f;
 
 // Tutorial streams IMU faster (kTutorialImuPeriodMs): shorter Δt makes |Δa|/Δt smaller per step with the
 // same LPF, so use a more responsive filter, lower threshold, and shorter re-arm for the CSV impulse column.
