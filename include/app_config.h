@@ -59,7 +59,8 @@ constexpr uint16_t kImuWireTimeoutMs = 1000;
 
 // IMU poll intervals (ms).
 constexpr uint32_t kGameplayImuPeriodMs = 20;  // faster sampling → quicker impulse detection (was 50).
-constexpr uint32_t kTutorialImuPeriodMs = 12;  // much faster stream for tuning/capture
+// Tutorial CSV / UDP stream (linear + Euler per row). ~6 ms ≈ 166 Hz; lower = faster but more I²C + Wi‑Fi load.
+constexpr uint32_t kTutorialImuPeriodMs = 6;
 
 // Button timing (ms).
 constexpr uint32_t kButtonDebounceMs = 45;
@@ -78,5 +79,5 @@ constexpr float kGameplayJerkLpfAlpha = 0.42f;
 // Tutorial streams IMU faster (kTutorialImuPeriodMs): shorter Δt makes |Δa|/Δt smaller per step with the
 // same LPF, so use a more responsive filter, lower threshold, and shorter re-arm for the CSV impulse column.
 constexpr float kTutorialJerkThreshold = 8.f;
-constexpr uint32_t kTutorialJerkRetriggerMs = 120;
-constexpr float kTutorialJerkLpfAlpha = 0.45f;
+constexpr uint32_t kTutorialJerkRetriggerMs = 70;
+constexpr float kTutorialJerkLpfAlpha = 0.52f;

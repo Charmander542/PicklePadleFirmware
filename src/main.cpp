@@ -392,8 +392,8 @@ void setup() {
 
     g_stateMutex = xSemaphoreCreateMutex();
     g_uiEventQueue = xQueueCreate(16, sizeof(UiEventMsg));
-    // Tutorial streams ~80 CSV rows/s; give headroom so postText rarely times out.
-    g_netTxQueue = xQueueCreate(96, sizeof(NetOutgoingMsg));
+    // Tutorial can stream ~150+ rows/s; larger queue so postText rarely times out under load.
+    g_netTxQueue = xQueueCreate(160, sizeof(NetOutgoingMsg));
 
     gMux.beginWire(BUS_SDA, BUS_SCL, 100000);
 

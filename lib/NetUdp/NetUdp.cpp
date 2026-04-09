@@ -93,8 +93,8 @@ void NetUdp::service() {
     }
 
     // Drain a bounded burst per tick so lwIP can free pbufs (errno 12 / ENOMEM if we spam).
-    // Tutorial mode needs a higher sustained rate than gameplay impulses.
-    constexpr UBaseType_t kMaxTxPerService = 12;
+    // Tutorial mode pushes many rows/sec; keep burst high enough to empty the queue each cycle.
+    constexpr UBaseType_t kMaxTxPerService = 28;
     for (UBaseType_t tx = 0; tx < kMaxTxPerService; ++tx) {
         NetOutgoingMsg m;
         if (xQueueReceive(g_netTxQueue, &m, 0) != pdTRUE) break;
