@@ -32,9 +32,9 @@ constexpr uint16_t kDefaultHostPort = 4210;
 constexpr uint16_t kLocalUdpPort = 4211;
 constexpr char kSdLogPath[] = "/PADDLE.LOG";  // 8.3 filename required by current FatFs config
 
-// FreeRTOS: IMU / UI task should preempt UDP housekeeping (closer to a single fast loop()).
-constexpr uint8_t kAppTaskPriority = 5;
-constexpr uint8_t kNetTaskPriority  = 3;
+// FreeRTOS: equal priority avoids starving UDP RX (gameplay mode) vs IMU loop.
+constexpr uint8_t kAppTaskPriority = 4;
+constexpr uint8_t kNetTaskPriority = 4;
 
 // Wi‑Fi power shaping: low TX power during association (reduces peak current / brownout risk), then ramp up.
 constexpr int8_t kWifiConnectTxPowerDbm = 2;

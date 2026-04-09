@@ -1,12 +1,14 @@
 #include "app_state.h"
 #include "app_config.h"
 #include <Preferences.h>
+#include "freertos/portmacro.h"
 
 QueueHandle_t g_uiEventQueue = nullptr;
 QueueHandle_t g_netTxQueue = nullptr;
 SemaphoreHandle_t g_stateMutex = nullptr;
 
 RunMode g_runMode = RunMode::Idle;
+static portMUX_TYPE g_runModeMux = portMUX_INITIALIZER_UNLOCKED;
 
 IPAddress g_hostAddr;
 uint16_t g_hostPort = kDefaultHostPort;
@@ -30,17 +32,14 @@ void hostAddrSaveToPrefs(const IPAddress &ip, uint16_t port) {
 }
 
 void setRunMode(RunMode m) {
-    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-        g_runMode = m;
-        xSemaphoreGive(g_stateMutex);
-    }
+    portENTER_CRITICAL(&g_runModeMux);
+    g_runMode = m;
+    portEXIT_CRITICAL(&g_runModeMux);
 }
 
 RunMode getRunMode() {
-    RunMode m = RunMode::Idle;
-    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-        m = g_runMode;
-        xSemaphoreGive(g_stateMutex);
-    }
+    portENTER_CRITICAL(&g_runModeMux);
+    const RunMode m = g_runMode;
+    portEXIT_CRITICAL(&g_runModeMux);
     return m;
 }

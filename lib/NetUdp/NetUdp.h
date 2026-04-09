@@ -25,9 +25,10 @@ public:
     void setRemote(const IPAddress &ip, uint16_t port);
 
 private:
-    bool sendNowUnlocked_(const char *msg);
+    // Caller must hold udpMu_. All WiFiUDP use goes through one mutex (net + app tasks).
+    bool sendPacketLocked_(const char *msg);
 
-    WiFiUDP udp_;
-    SemaphoreHandle_t sendMu_{nullptr};
+    WiFiUDP     udp_;
+    SemaphoreHandle_t udpMu_{nullptr};
     uint16_t localPort_{0};
 };

@@ -5,8 +5,8 @@
 
 bool NetUdp::begin(uint16_t localPort) {
     localPort_ = localPort;
-    sendMu_ = xSemaphoreCreateMutex();
-    if (!sendMu_) return false;
+    udpMu_ = xSemaphoreCreateMutex();
+    if (!udpMu_) return false;
     return udp_.begin(localPort_) == 1;
 }
 
@@ -27,10 +27,13 @@ bool NetUdp::postText(const char *msg) {
 }
 
 bool NetUdp::trySendImmediate(const char *msg) {
-    return sendNowUnlocked_(msg);
+    if (xSemaphoreTake(udpMu_, pdMS_TO_TICKS(200)) != pdTRUE) return false;
+    const bool ok = sendPacketLocked_(msg);
+    xSemaphoreGive(udpMu_);
+    return ok;
 }
 
-bool NetUdp::sendNowUnlocked_(const char *msg) {
+bool NetUdp::sendPacketLocked_(const char *msg) {
     if (!msg || msg[0] == 0) return false;
     if (WiFi.status() != WL_CONNECTED) return false;
 
@@ -43,10 +46,7 @@ bool NetUdp::sendNowUnlocked_(const char *msg) {
 
     if (port == 0 || ip == IPAddress(0, 0, 0, 0)) return false;
 
-    if (xSemaphoreTake(sendMu_, pdMS_TO_TICKS(200)) != pdTRUE) return false;
-
     constexpr int kUdpSendAttempts = 4;
-    bool ok = false;
     for (int attempt = 0; attempt < kUdpSendAttempts; ++attempt) {
         if (attempt > 0) {
             vTaskDelay(pdMS_TO_TICKS(2));
@@ -56,16 +56,16 @@ bool NetUdp::sendNowUnlocked_(const char *msg) {
         }
         udp_.print(msg);
         if (udp_.endPacket() > 0) {
-            ok = true;
-            break;
+            return true;
         }
     }
-    xSemaphoreGive(sendMu_);
-    return ok;
+    return false;
 }
 
 void NetUdp::service() {
-    int n = udp_.parsePacket();
+    if (xSemaphoreTake(udpMu_, pdMS_TO_TICKS(50)) != pdTRUE) return;
+
+    const int n = udp_.parsePacket();
     if (n > 0) {
         char buf[128];
         int r = udp_.read((uint8_t *)buf, sizeof(buf) - 1);
@@ -99,6 +99,8 @@ void NetUdp::service() {
         NetOutgoingMsg m;
         if (xQueueReceive(g_netTxQueue, &m, 0) != pdTRUE) break;
         if (SdLogger::instance().ok()) SdLogger::instance().logf("udp tx: %s", m.text);
-        sendNowUnlocked_(m.text);
+        sendPacketLocked_(m.text);
     }
+
+    xSemaphoreGive(udpMu_);
 }
