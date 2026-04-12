@@ -16,7 +16,7 @@ inline void fxClear(Adafruit_NeoPixel &strip) {
 
 inline void fxNeoBootChase(Adafruit_NeoPixel &strip) {
     const uint16_t numPixels = strip.numPixels();
-    const uint32_t purple = fxColor(128, 0, 128);  // Purple color
+    const uint32_t purple_color = fxColor(128, 0, 128);  // Purple color
     const int steps = 50;  // Number of fade steps
     const int delayMs = 1000 / (steps * 2);  // Total 1 second for fade on + fade off
 

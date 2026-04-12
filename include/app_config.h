@@ -70,15 +70,11 @@ constexpr uint32_t kWifiForgetHoldMs = 8000;
 
 // Gameplay: jerk threshold (m/s^3). Production ballpark is often ~1e3–1e4; lowered a lot for bench testing
 // (tap the paddle gently). Raise before shipping.
-<<<<<<< HEAD
-constexpr float kGameplayJerkThreshold = 50.f;
-// Minimum ms between transmitted impulses (debounce).
-constexpr uint32_t kGameplayJerkRetriggerMs = 800;
-=======
+
 constexpr float kGameplayJerkThreshold = 35.f;
 // Minimum ms between transmitted impulses (debounce).
 constexpr uint32_t kGameplayJerkRetriggerMs = 1000;
->>>>>>> refs/remotes/origin/main
+
 // Higher = IMU filter tracks sudden accel faster (0.01–1). Gameplay uses a snappier filter than before (0.2).
 constexpr float kGameplayJerkLpfAlpha = 0.42f;
 
