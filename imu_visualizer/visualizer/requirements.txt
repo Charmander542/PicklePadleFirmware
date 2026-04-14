@@ -1,0 +1,5 @@
+numpy
+numpy-stl
+pyserial
+glfw
+PyOpenGL
