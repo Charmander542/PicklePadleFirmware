@@ -36,6 +36,41 @@ static WifiPortal gPortal;
 static bool s_imuReady = false;
 /** After STA connect, show IP until UE sends UDP `idle` (UiEvent::ModeIdle). */
 static bool s_showPaddleIpUntilUeIdle = true;
+static portMUX_TYPE s_swingAudioMux = portMUX_INITIALIZER_UNLOCKED;
+static bool s_swingAudioBusy = false;
+
+static void swingHitAudioTask(void * /*param*/) {
+    paddleFx_playSpeakerSteps(gSpk, kFxBallHitSpeaker, PADDLE_FX_SPEAKER_COUNT(kFxBallHitSpeaker));
+    portENTER_CRITICAL(&s_swingAudioMux);
+    s_swingAudioBusy = false;
+    portEXIT_CRITICAL(&s_swingAudioMux);
+    vTaskDelete(nullptr);
+}
+
+static void triggerSwingHitAudioAsync() {
+    bool canStart = false;
+    portENTER_CRITICAL(&s_swingAudioMux);
+    if (!s_swingAudioBusy) {
+        s_swingAudioBusy = true;
+        canStart = true;
+    }
+    portEXIT_CRITICAL(&s_swingAudioMux);
+
+    if (!canStart) {
+        return;
+    }
+
+    constexpr uint32_t kSwingAudioStack = 2048;
+    constexpr UBaseType_t kSwingAudioPriority = 2;
+    if (xTaskCreatePinnedToCore(swingHitAudioTask, "fx_audio", kSwingAudioStack, nullptr,
+                                kSwingAudioPriority, nullptr, 0) != pdPASS) {
+        // Fallback: if task creation fails, play synchronously to avoid dropping feedback.
+        paddleFx_playSpeakerSteps(gSpk, kFxBallHitSpeaker, PADDLE_FX_SPEAKER_COUNT(kFxBallHitSpeaker));
+        portENTER_CRITICAL(&s_swingAudioMux);
+        s_swingAudioBusy = false;
+        portEXIT_CRITICAL(&s_swingAudioMux);
+    }
+}
 
 static wifi_power_t mapDbmToWifiPower(int8_t dbm) {
     if (dbm <= 2) return WIFI_POWER_2dBm;
@@ -177,10 +212,9 @@ static void drainUiEvents() {
         switch (ev.kind) {
         case UiEvent::SwingHitHost:
             if (SdLogger::instance().ok()) SdLogger::instance().log("event: swing hit (host)");
+            triggerSwingHitAudioAsync();
             paddleFx_playSteps(gMux, kFxBallHitHaptic, PADDLE_FX_STEP_COUNT(kFxBallHitHaptic));
             gStrip.playBallHit();
-            paddleFx_playSpeakerSteps(gSpk, kFxBallHitSpeaker,
-                                      PADDLE_FX_SPEAKER_COUNT(kFxBallHitSpeaker));
             break;
         case UiEvent::ModeIdle:
             if (SdLogger::instance().ok()) SdLogger::instance().log("mode: idle");
