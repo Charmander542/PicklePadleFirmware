@@ -118,12 +118,13 @@ static void imuReadEuler(Vec3 *out) {
 }
 
 /**
- * Blast read for tutorial flood: quat + euler + cal in ONE lock scope at 400 kHz.
+ * Blast read for tutorial flood: quat + euler + cal + linear accel in ONE lock scope at 400 kHz.
  * No mux disable per call (done once at mode entry), no clock restore.
  */
 struct ImuSnapshot {
     float qw, qx, qy, qz;
     float ex, ey, ez;
+    float ax, ay, az;
     uint8_t calSys, calGyro, calAccel, calMag;
 };
 
@@ -136,6 +137,8 @@ static void imuReadSnapshotFast(ImuSnapshot *s) {
     s->qy = (float)q.y(); s->qz = (float)q.z();
     imu::Vector<3> ev = gBno.getVector(Adafruit_BNO055::VECTOR_EULER);
     s->ex = (float)ev.x(); s->ey = (float)ev.y(); s->ez = (float)ev.z();
+    imu::Vector<3> la = gBno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
+    s->ax = (float)la.x(); s->ay = (float)la.y(); s->az = (float)la.z();
     gBno.getCalibration(&s->calSys, &s->calGyro, &s->calAccel, &s->calMag);
 }
 
@@ -196,10 +199,12 @@ static void drainUiEvents() {
             break;
         case UiEvent::ModeTutorial:
             if (SdLogger::instance().ok()) SdLogger::instance().log("mode: tutorial (flood)");
+            gJerk.configure(kGameplayJerkThreshold, kGameplayJerkRetriggerMs, kGameplayJerkLpfAlpha);
             setRunMode(RunMode::Tutorial);
+            gJerk.reset();
             applyWifiStreamingBoost();
             gDisp.showTwoLines("Mode", "Tutorial FLOOD");
-            SdLogger::serialPrintln("[tutorial] entering flood mode — Q,w,x,y,z,ex,ey,ez,cal,btn");
+            SdLogger::serialPrintln("[tutorial] entering flood mode — ex,ey,ez,btn,impulse");
             break;
         }
     }
@@ -295,7 +300,7 @@ static void tutorialFloodLoop() {
         }
 
         // Fast button poll (no debounce logic — just sample state).
-        const int btn = (digitalRead(BUTTON_PIN) == LOW) ? 1 : 0;
+        const int btn = (digitalRead(BUTTON_PIN) == LOW) ? 0 : 1;
 
         if (!s_imuReady) {
             vTaskDelay(1);
@@ -304,12 +309,14 @@ static void tutorialFloodLoop() {
 
         imuReadSnapshotFast(&snap);
 
+        Vec3 accel = {snap.ax, snap.ay, snap.az};
+        const bool jerkTriggered = gJerk.update(accel, micros());
+        const float impulse = jerkTriggered ? gJerk.lastJerkMagnitude() : 0.0f;
+
         const int len = snprintf(pkt, sizeof(pkt),
-            "Q,%.5f,%.5f,%.5f,%.5f,%.1f,%.1f,%.1f,%u,%u,%u,%u,%d",
-            snap.qw, snap.qx, snap.qy, snap.qz,
+            "%.1f,%.1f,%.1f,%d,%.1f",
             snap.ex, snap.ey, snap.ez,
-            snap.calSys, snap.calGyro, snap.calAccel, snap.calMag,
-            btn);
+            btn, impulse);
 
         gNet.sendFast(pkt, (uint16_t)len);
 
