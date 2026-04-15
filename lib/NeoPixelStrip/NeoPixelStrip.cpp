@@ -97,3 +97,13 @@ void NeoPixelStrip::showStaConnectedSolid() {
     }
     strip_.show();
 }
+
+void NeoPixelStrip::showSolidColor(uint8_t r, uint8_t g, uint8_t b) {
+    resetWifiLedAnim();
+    const uint16_t n = strip_.numPixels();
+    const uint32_t c = strip_.Color(r, g, b);
+    for (uint16_t i = 0; i < n; i++) {
+        strip_.setPixelColor(i, c);
+    }
+    strip_.show();
+}

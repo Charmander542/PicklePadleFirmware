@@ -2,6 +2,35 @@
 #include <SdLogger.h>
 #include <freertos/task.h>
 #include <string.h>
+#include <strings.h>
+
+namespace {
+bool parseNamedColor(const char *msg, uint8_t &r, uint8_t &g, uint8_t &b) {
+    if (!msg || msg[0] == 0) return false;
+
+    const char *name = msg;
+    if (strncasecmp(msg, "color ", 6) == 0) {
+        name = msg + 6;
+    }
+    while (*name == ' ') name++;
+    if (*name == 0) return false;
+
+    if (strcasecmp(name, "red") == 0) { r = 255; g = 0; b = 0; return true; }
+    if (strcasecmp(name, "green") == 0) { r = 0; g = 255; b = 0; return true; }
+    if (strcasecmp(name, "blue") == 0) { r = 0; g = 0; b = 255; return true; }
+    if (strcasecmp(name, "white") == 0) { r = 255; g = 255; b = 255; return true; }
+    if (strcasecmp(name, "yellow") == 0) { r = 255; g = 255; b = 0; return true; }
+    if (strcasecmp(name, "purple") == 0 || strcasecmp(name, "magenta") == 0) {
+        r = 255; g = 0; b = 255; return true;
+    }
+    if (strcasecmp(name, "cyan") == 0) { r = 0; g = 255; b = 255; return true; }
+    if (strcasecmp(name, "orange") == 0) { r = 255; g = 140; b = 0; return true; }
+    if (strcasecmp(name, "off") == 0 || strcasecmp(name, "black") == 0) {
+        r = 0; g = 0; b = 0; return true;
+    }
+    return false;
+}
+} // namespace
 
 bool NetUdp::begin(uint16_t localPort) {
     localPort_ = localPort;
@@ -119,6 +148,15 @@ void NetUdp::service() {
             } else if (strcasecmp(buf, "tutorial") == 0) {
                 ev.kind = UiEvent::ModeTutorial;
                 xQueueSend(g_uiEventQueue, &ev, 0);
+            } else {
+                uint8_t r = 0, g = 0, b = 0;
+                if (parseNamedColor(buf, r, g, b)) {
+                    ev.kind = UiEvent::SetIdleColor;
+                    ev.r = r;
+                    ev.g = g;
+                    ev.b = b;
+                    xQueueSend(g_uiEventQueue, &ev, 0);
+                }
             }
 
             if (SdLogger::instance().ok()) SdLogger::instance().logf("udp rx: %s", buf);

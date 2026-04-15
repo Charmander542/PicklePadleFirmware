@@ -25,6 +25,8 @@ public:
     void tickStaConnecting();
     /** STA: steady fill after WiFi is up. */
     void showStaConnectedSolid();
+    /** Force a solid RGB color immediately. */
+    void showSolidColor(uint8_t r, uint8_t g, uint8_t b);
     void resetWifiLedAnim();
 
     Adafruit_NeoPixel &raw() { return strip_; }

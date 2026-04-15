@@ -13,10 +13,14 @@ enum class UiEvent : uint8_t {
   ModeIdle,
   ModeGameplay,
   ModeTutorial,
+  SetIdleColor,
 };
 
 struct UiEventMsg {
   UiEvent kind;
+  uint8_t r{0};
+  uint8_t g{0};
+  uint8_t b{0};
 };
 
 struct NetOutgoingMsg {

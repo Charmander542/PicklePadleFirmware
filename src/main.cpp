@@ -206,6 +206,15 @@ static void drainUiEvents() {
             gDisp.showTwoLines("Mode", "Tutorial FLOOD");
             SdLogger::serialPrintln("[tutorial] entering flood mode — ex,ey,ez,btn,impulse");
             break;
+        case UiEvent::SetIdleColor:
+            if (getRunMode() == RunMode::Idle) {
+                gStrip.showSolidColor(ev.r, ev.g, ev.b);
+                if (SdLogger::instance().ok()) {
+                    SdLogger::instance().logf("idle color: r=%u g=%u b=%u",
+                                              (unsigned)ev.r, (unsigned)ev.g, (unsigned)ev.b);
+                }
+            }
+            break;
         }
     }
 }
@@ -215,44 +224,50 @@ static void pollButton(RunMode mode) {
     static uint32_t tDown = 0;
     static bool holdSent = false;
     static bool wifiForgetArmed = false;
+    static bool stableRaw = false;
+    static bool lastRawSample = false;
+    static uint32_t rawChangedAt = 0;
 
     const bool raw = (digitalRead(BUTTON_PIN) == LOW);
     const uint32_t now = millis();
 
-    if (raw) {
-        if (!down) {
+    if (raw != lastRawSample) {
+        lastRawSample = raw;
+        rawChangedAt = now;
+    }
+
+    if (stableRaw != lastRawSample && (now - rawChangedAt) >= kButtonDebounceMs) {
+        stableRaw = lastRawSample;
+        if (stableRaw) {
             down = true;
             tDown = now;
             holdSent = false;
             wifiForgetArmed = false;
+            if (mode != RunMode::Tutorial) gNet.postText("detect btn push");
         } else {
-            if (!holdSent && (now - tDown) >= kButtonHoldMs) {
-                holdSent = true;
-                if (mode != RunMode::Tutorial) gNet.postText("detect btn hold");
-            }
-            if (mode == RunMode::Idle && (now - tDown) >= kWifiForgetHoldMs && !wifiForgetArmed) {
-                wifiForgetArmed = true;
-                gDisp.showTwoLines("WiFi setup", "Forgetting...");
-                SdLogger::serialPrintln("[prefs] Clearing Wi-Fi credentials — rebooting to setup portal.");
-                Preferences prefs;
-                prefs.begin(kPrefsNamespace, false);
-                prefs.remove(kPrefsKeySsid);
-                prefs.remove(kPrefsKeyPass);
-                prefs.end();
-                delay(400);
-                ESP.restart();
-            }
+            down = false;
+            holdSent = false;
+            wifiForgetArmed = false;
         }
-    } else {
-        if (down) {
-            const uint32_t elapsed = now - tDown;
-            if (!holdSent && elapsed >= kButtonDebounceMs && elapsed < kButtonHoldMs) {
-                if (mode != RunMode::Tutorial) gNet.postText("detect btn push");
-            }
+    }
+
+    if (down) {
+        if (!holdSent && (now - tDown) >= kButtonHoldMs) {
+            holdSent = true;
+            if (mode != RunMode::Tutorial) gNet.postText("detect btn hold");
         }
-        down = false;
-        holdSent = false;
-        wifiForgetArmed = false;
+        if (mode == RunMode::Idle && (now - tDown) >= kWifiForgetHoldMs && !wifiForgetArmed) {
+            wifiForgetArmed = true;
+            gDisp.showTwoLines("WiFi setup", "Forgetting...");
+            SdLogger::serialPrintln("[prefs] Clearing Wi-Fi credentials — rebooting to setup portal.");
+            Preferences prefs;
+            prefs.begin(kPrefsNamespace, false);
+            prefs.remove(kPrefsKeySsid);
+            prefs.remove(kPrefsKeyPass);
+            prefs.end();
+            delay(400);
+            ESP.restart();
+        }
     }
 }
 
@@ -295,6 +310,8 @@ static void tutorialFloodLoop() {
                     break; // already in tutorial
                 case UiEvent::SwingHitHost:
                     break; // ignore FX in flood mode
+                case UiEvent::SetIdleColor:
+                    break; // ignore manual color commands in tutorial mode
                 }
             }
         }
@@ -320,8 +337,12 @@ static void tutorialFloodLoop() {
 
         gNet.sendFast(pkt, (uint16_t)len);
 
-        // Minimal yield so the RTOS can service WiFi and the net task can handle RX.
-        taskYIELD();
+        // Keep tutorial very fast while avoiding an unrestricted flood.
+        if (kTutorialImuPeriodMs > 0) {
+            vTaskDelay(pdMS_TO_TICKS(kTutorialImuPeriodMs));
+        } else {
+            taskYIELD();
+        }
     }
 }
 
@@ -354,10 +375,10 @@ static void appTask(void * /*param*/) {
                         "[imu] tx linear_accel m/s^2 x=%.3f y=%.3f z=%.3f  jerk=%.1f m/s^3\n",
                         a.x, a.y, a.z, j);
                     char buf[48];
-                    snprintf(buf, sizeof(buf), "%.1f", j);
+                    const int len = snprintf(buf, sizeof(buf), "%.1f", j);
                     if (SdLogger::instance().ok())
                         SdLogger::instance().logf("impulse tx %s", buf);
-                    if (!gNet.trySendImmediate(buf)) {
+                    if (!gNet.sendFast(buf, (uint16_t)len)) {
                         gNet.postText(buf);
                     }
                 }

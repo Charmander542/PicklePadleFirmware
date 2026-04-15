@@ -63,12 +63,12 @@ constexpr uint16_t kImuWireTimeoutMs = 1000;
 constexpr uint16_t kImuFastWireTimeoutMs = 50;
 
 // IMU poll intervals (ms).
-constexpr uint32_t kGameplayImuPeriodMs = 20;  // faster sampling → quicker impulse detection (was 50).
-// Tutorial flood: 0 = fire as fast as I²C allows (~200–500 Hz depending on bus + WiFi load).
-constexpr uint32_t kTutorialImuPeriodMs = 0;
+constexpr uint32_t kGameplayImuPeriodMs = 5;  // tighter impulse latency in gameplay.
+// Tutorial stream pacing: keep very fast, but not absolute max flood.
+constexpr uint32_t kTutorialImuPeriodMs = 2;
 
 // Button timing (ms).
-constexpr uint32_t kButtonDebounceMs = 45;
+constexpr uint32_t kButtonDebounceMs = 12;
 constexpr uint32_t kButtonHoldMs = 650;
 // Idle only: hold this long to erase saved Wi‑Fi and reboot into setup portal (PicklePaddle-Setup).
 constexpr uint32_t kWifiForgetHoldMs = 8000;
