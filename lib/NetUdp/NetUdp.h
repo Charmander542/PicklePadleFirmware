@@ -19,10 +19,18 @@ public:
     // Same path as net-task send, but from any task (mutex-protected). Skips the TX queue.
     bool trySendImmediate(const char *msg);
 
+    // Single-attempt, zero-retry, no-logging send for flooding tutorial data.
+    // Caller is on the app task; takes the UDP mutex with a short timeout.
+    // Returns false silently (acceptable packet loss in a flood).
+    bool sendFast(const char *msg, uint16_t len);
+
     // Call only from net task: RX + flush TX queue.
     void service();
 
     void setRemote(const IPAddress &ip, uint16_t port);
+
+    // Snapshot host addr+port into caller-local storage once (avoids g_stateMutex per packet).
+    void cacheRemote(IPAddress &outIp, uint16_t &outPort);
 
 private:
     // Caller must hold udpMu_. All WiFiUDP use goes through one mutex (net + app tasks).

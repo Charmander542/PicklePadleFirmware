@@ -1,23 +1,24 @@
 """
-IMU STL Visualizer — reads BNO055 quaternion data from a serial port and
-renders a user-supplied STL file rotating in real-time to match the sensor
-orientation.
+IMU STL Visualizer — reads BNO055 quaternion data from serial OR UDP and
+renders a user-supplied STL file rotating in real-time to match the sensor.
 
-Uses GLFW + PyOpenGL (no pygame) so pip can install on current Python versions
-on Windows without building pygame from source.
-
+Uses GLFW + PyOpenGL (no pygame).
+    
 Performance: mesh is uploaded to a GPU VBO once; each frame is one glDrawArrays.
 Use --vsync for smooth video; leave it off for lowest motion-to-photon latency.
 
 Usage:
-    python imu_viewer.py COM5                     # Windows
-    python imu_viewer.py /dev/ttyUSB0             # Linux
-    python imu_viewer.py COM5 --stl model.stl     # custom STL
-    python imu_viewer.py COM5 --baud 115200       # explicit baud
+    # Serial (imu_visualizer firmware):
+    python imu_viewer.py COM5 --stl Paddle.stl
+
+    # UDP (main paddle firmware, tutorial flood mode):
+    python imu_viewer.py --udp 4210 --stl Paddle.stl
 """
 
 import argparse
 import ctypes
+import select
+import socket
 import sys
 import threading
 import time
@@ -46,7 +47,6 @@ def quat_to_gl_matrix(w, x, y, z, out: np.ndarray) -> None:
     r00, r01, r02 = 1 - (yy + zz), xy - wz, xz + wy
     r10, r11, r12 = xy + wz, 1 - (xx + zz), yz - wx
     r20, r21, r22 = xz - wy, yz + wx, 1 - (xx + yy)
-    # Column-major
     out[0:16] = (
         r00, r10, r20, 0.0,
         r01, r11, r21, 0.0,
@@ -58,7 +58,7 @@ def quat_to_gl_matrix(w, x, y, z, out: np.ndarray) -> None:
 # ── STL loading ─────────────────────────────────────────────────────────────
 
 def load_stl(path: str):
-    """Load an STL file, center it, and scale to fit a ±1 cube. Returns (vertices, normals)."""
+    """Load an STL file, center it, and scale to fit a ±1 cube."""
     m = stl_mesh.Mesh.from_file(path)
     verts = m.vectors.reshape(-1, 3).astype(np.float32)
     normals = np.repeat(m.normals, 3, axis=0).astype(np.float32)
@@ -73,16 +73,16 @@ def load_stl(path: str):
 
 
 def generate_box():
-    """Fallback: a simple 3D box (paddle-ish proportions) when no STL is given."""
-    sx, sy, sz = 0.8, 0.1, 1.2  # width, thickness, height
+    """Fallback: a simple 3D box (paddle-ish proportions)."""
+    sx, sy, sz = 0.8, 0.1, 1.2
     v = np.array([
         [-sx, -sy, -sz], [ sx, -sy, -sz], [ sx,  sy, -sz], [-sx,  sy, -sz],
         [-sx, -sy,  sz], [ sx, -sy,  sz], [ sx,  sy,  sz], [-sx,  sy,  sz],
     ], dtype=np.float32)
     faces = [
-        (0, 1, 2, 3), (4, 7, 6, 5),  # front / back
-        (0, 3, 7, 4), (1, 5, 6, 2),  # left / right
-        (3, 2, 6, 7), (0, 4, 5, 1),  # top / bottom
+        (0, 1, 2, 3), (4, 7, 6, 5),
+        (0, 3, 7, 4), (1, 5, 6, 2),
+        (3, 2, 6, 7), (0, 4, 5, 1),
     ]
     normals_per_face = [
         (0, 0, -1), (0, 0, 1), (-1, 0, 0), (1, 0, 0), (0, 1, 0), (0, -1, 0),
@@ -100,8 +100,6 @@ def generate_box():
 # ── GPU mesh (interleaved normal + vertex, static VBO) ─────────────────────
 
 class StaticInterleavedMesh:
-    """Normals (3) then positions (3) per vertex; stride 24 bytes."""
-
     __slots__ = ("_vbo", "_count")
 
     def __init__(self, vertices: np.ndarray, normals: np.ndarray):
@@ -138,17 +136,43 @@ class StaticInterleavedMesh:
             self._vbo = None
 
 
+# ── Packet parser (shared by serial and UDP readers) ───────────────────────
+
+def parse_q_packet(data: bytes, state_lock, state):
+    """Parse a Q,w,x,y,z,... line and update shared state dict under lock."""
+    if not data.startswith(b"Q,"):
+        return
+    parts = data.split(b",")
+    if len(parts) < 5:
+        return
+    try:
+        w = float(parts[1])
+        x = float(parts[2])
+        y = float(parts[3])
+        z = float(parts[4])
+        euler = (0.0, 0.0, 0.0)
+        cal = (0, 0, 0, 0)
+        if len(parts) >= 8:
+            euler = (float(parts[5]), float(parts[6]), float(parts[7]))
+        if len(parts) >= 12:
+            cal = (int(parts[8]), int(parts[9]), int(parts[10]), int(parts[11]))
+        with state_lock:
+            state["quat"][:] = (w, x, y, z)
+            state["euler"][:] = euler
+            state["cal"] = cal
+            state["pkt_count"] += 1
+    except (ValueError, IndexError):
+        pass
+
+
 # ── Serial reader thread ───────────────────────────────────────────────────
 
-class ImuReader:
-    def __init__(self, port: str, baud: int):
+class SerialReader:
+    def __init__(self, port, baud, state_lock, state):
         self.port = port
         self.baud = baud
-        self.quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)  # w, x, y, z
-        self.euler = np.array([0.0, 0.0, 0.0], dtype=np.float64)
-        self.cal = (0, 0, 0, 0)
-        self.connected = False
-        self._lock = threading.Lock()
+        self._lock = state_lock
+        self._state = state
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -158,23 +182,13 @@ class ImuReader:
     def stop(self):
         self._stop.set()
 
-    def snapshot(self):
-        """Copy latest pose for the render thread (small lock window)."""
-        with self._lock:
-            return (
-                self.quat.copy(),
-                self.euler.copy(),
-                self.cal,
-                self.connected,
-            )
-
     def _run(self):
         while not self._stop.is_set():
             try:
                 ser = serial.Serial(self.port, self.baud, timeout=0.05)
                 ser.reset_input_buffer()
                 with self._lock:
-                    self.connected = True
+                    self._state["connected"] = True
                 print(f"[serial] Connected to {self.port} @ {self.baud}")
             except serial.SerialException as e:
                 print(f"[serial] Cannot open {self.port}: {e}. Retrying in 2s...")
@@ -184,47 +198,61 @@ class ImuReader:
             try:
                 while not self._stop.is_set():
                     raw = ser.readline()
-                    if not raw.startswith(b"Q,"):
-                        continue
-                    parts = raw.split(b",")
-                    if len(parts) < 5:
-                        continue
-                    try:
-                        w = float(parts[1])
-                        x = float(parts[2])
-                        y = float(parts[3])
-                        z = float(parts[4])
-                        euler = (0.0, 0.0, 0.0)
-                        cal = (0, 0, 0, 0)
-                        if len(parts) >= 8:
-                            euler = (
-                                float(parts[5]),
-                                float(parts[6]),
-                                float(parts[7]),
-                            )
-                        if len(parts) >= 12:
-                            cal = (
-                                int(parts[8]),
-                                int(parts[9]),
-                                int(parts[10]),
-                                int(parts[11]),
-                            )
-                        with self._lock:
-                            self.quat[0] = w
-                            self.quat[1] = x
-                            self.quat[2] = y
-                            self.quat[3] = z
-                            self.euler[0] = euler[0]
-                            self.euler[1] = euler[1]
-                            self.euler[2] = euler[2]
-                            self.cal = cal
-                    except (ValueError, IndexError):
-                        pass
+                    if raw:
+                        parse_q_packet(raw, self._lock, self._state)
             except (serial.SerialException, OSError):
                 print("[serial] Disconnected. Reconnecting...")
                 with self._lock:
-                    self.connected = False
+                    self._state["connected"] = False
                 time.sleep(1)
+
+
+# ── UDP reader thread ──────────────────────────────────────────────────────
+
+class UdpReader:
+    def __init__(self, port, state_lock, state):
+        self.port = port
+        self._lock = state_lock
+        self._state = state
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+    def _run(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 256)
+        except OSError:
+            pass
+        sock.bind(("0.0.0.0", self.port))
+        sock.setblocking(False)
+
+        with self._lock:
+            self._state["connected"] = True
+        print(f"[udp] Listening on 0.0.0.0:{self.port}")
+
+        while not self._stop.is_set():
+            ready, _, _ = select.select([sock], [], [], 0.05)
+            if not ready:
+                continue
+            # Drain all queued datagrams, keep only the latest.
+            latest = None
+            try:
+                while True:
+                    data, _ = sock.recvfrom(256)
+                    latest = data
+            except BlockingIOError:
+                pass
+            if latest is not None:
+                parse_q_packet(latest, self._lock, self._state)
+
+        sock.close()
 
 
 # ── OpenGL renderer ─────────────────────────────────────────────────────────
@@ -252,19 +280,17 @@ def init_gl(width, height):
 
 
 def draw_axes(length=1.5):
-    """World-frame reference axes (thin lines behind the model)."""
     glDisable(GL_LIGHTING)
     glLineWidth(1.5)
     glBegin(GL_LINES)
-    glColor3f(1, 0.2, 0.2); glVertex3f(0, 0, 0); glVertex3f(length, 0, 0)  # X red
-    glColor3f(0.2, 1, 0.2); glVertex3f(0, 0, 0); glVertex3f(0, length, 0)  # Y green
-    glColor3f(0.3, 0.3, 1); glVertex3f(0, 0, 0); glVertex3f(0, 0, length)  # Z blue
+    glColor3f(1, 0.2, 0.2); glVertex3f(0, 0, 0); glVertex3f(length, 0, 0)
+    glColor3f(0.2, 1, 0.2); glVertex3f(0, 0, 0); glVertex3f(0, length, 0)
+    glColor3f(0.3, 0.3, 1); glVertex3f(0, 0, 0); glVertex3f(0, 0, length)
     glEnd()
     glEnable(GL_LIGHTING)
 
 
 def apply_ref_offset(quat: np.ndarray, ref_quat) -> None:
-    """In-place: quat becomes conj(ref) * quat (same convention as before)."""
     if ref_quat is None:
         return
     rw, rx, ry, rz = ref_quat[0], ref_quat[1], ref_quat[2], ref_quat[3]
@@ -278,33 +304,36 @@ def apply_ref_offset(quat: np.ndarray, ref_quat) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="BNO055 IMU → STL Visualizer")
-    parser.add_argument("port", help="Serial port (e.g. COM5 or /dev/ttyUSB0)")
+    parser = argparse.ArgumentParser(
+        description="BNO055 IMU → STL Visualizer (serial or UDP)",
+    )
+    parser.add_argument(
+        "port",
+        nargs="?",
+        default=None,
+        help="Serial port (e.g. COM5). Omit when using --udp.",
+    )
     parser.add_argument("--baud", type=int, default=115200)
-    parser.add_argument("--stl", type=str, default=None, help="Path to .stl file (uses default box if omitted)")
     parser.add_argument(
-        "--vsync",
-        action="store_true",
-        help="Enable V-Sync (caps FPS to monitor; smoother, slightly higher latency)",
+        "--udp",
+        type=int,
+        default=None,
+        metavar="PORT",
+        help="Listen for UDP packets on this port instead of serial (e.g. --udp 4210)",
     )
-    parser.add_argument(
-        "--console-hz",
-        type=float,
-        default=0.0,
-        help="Print IMU line to console N times/sec (0 = off, default for speed)",
-    )
-    parser.add_argument(
-        "--title-hz",
-        type=float,
-        default=10.0,
-        help="Max window title updates per second (lower = less CPU on some OSes)",
-    )
+    parser.add_argument("--stl", type=str, default=None)
+    parser.add_argument("--vsync", action="store_true")
+    parser.add_argument("--console-hz", type=float, default=0.0)
+    parser.add_argument("--title-hz", type=float, default=10.0)
     args = parser.parse_args()
+
+    if args.udp is None and args.port is None:
+        parser.error("Provide a serial port or --udp PORT")
 
     if args.stl and Path(args.stl).exists():
         print(f"[mesh] Loading {args.stl}")
         vertices, normals = load_stl(args.stl)
-        print(f"[mesh] {len(vertices) // 3} triangles, {len(vertices)} vertices → GPU VBO")
+        print(f"[mesh] {len(vertices) // 3} triangles → GPU VBO")
     else:
         if args.stl:
             print(f"[mesh] File not found: {args.stl} — using default box")
@@ -340,15 +369,32 @@ def main():
     glfw.set_framebuffer_size_callback(window, on_resize)
     init_gl(width, height)
 
-    mesh = StaticInterleavedMesh(vertices, normals)
+    mesh_obj = StaticInterleavedMesh(vertices, normals)
 
-    reader = ImuReader(args.port, args.baud)
+    state_lock = threading.Lock()
+    state = {
+        "quat": np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64),
+        "euler": np.array([0.0, 0.0, 0.0], dtype=np.float64),
+        "cal": (0, 0, 0, 0),
+        "connected": False,
+        "pkt_count": 0,
+    }
+
+    if args.udp is not None:
+        reader = UdpReader(args.udp, state_lock, state)
+        source_label = f"UDP :{args.udp}"
+    else:
+        reader = SerialReader(args.port, args.baud, state_lock, state)
+        source_label = f"Serial {args.port}"
     reader.start()
 
     ref_quat = None
     key_r_prev = False
     last_console = 0.0
     last_title = 0.0
+    last_pkt_count = 0
+    last_pps_time = time.perf_counter()
+    pps_display = 0.0
     console_interval = 1.0 / args.console_hz if args.console_hz and args.console_hz > 0 else None
     title_interval = 1.0 / args.title_hz if args.title_hz and args.title_hz > 0 else None
 
@@ -356,8 +402,8 @@ def main():
     quat_work = np.empty(4, dtype=np.float64)
 
     print(
-        "[view] R = reset | ESC = quit | "
-        + ("V-Sync ON" if args.vsync else "V-Sync OFF (max FPS / lowest latency)")
+        f"[view] {source_label} | R = reset | ESC = quit | "
+        + ("V-Sync ON" if args.vsync else "V-Sync OFF")
     )
 
     while not glfw.window_should_close(window):
@@ -366,7 +412,8 @@ def main():
 
         r_down = glfw.get_key(window, glfw.KEY_R) == glfw.PRESS
         if r_down and not key_r_prev:
-            quat_work[:], _, _, _ = reader.snapshot()
+            with state_lock:
+                quat_work[:] = state["quat"]
             ref_quat = quat_work.copy()
             print("[view] Orientation reset")
         key_r_prev = r_down
@@ -375,7 +422,13 @@ def main():
         if fbw != width or fbh != height:
             width, height = fbw, fbh
 
-        quat_work[:], euler, cal, connected = reader.snapshot()
+        with state_lock:
+            quat_work[:] = state["quat"]
+            euler = state["euler"].copy()
+            cal = state["cal"]
+            connected = state["connected"]
+            cur_pkt = state["pkt_count"]
+
         apply_ref_offset(quat_work, ref_quat)
         quat_to_gl_matrix(
             float(quat_work[0]),
@@ -386,20 +439,28 @@ def main():
         )
 
         now = time.perf_counter()
+        dt_pps = now - last_pps_time
+        if dt_pps >= 1.0:
+            pps_display = (cur_pkt - last_pkt_count) / dt_pps
+            last_pkt_count = cur_pkt
+            last_pps_time = now
+
         if title_interval is None or (now - last_title) >= title_interval:
             last_title = now
-            st = "OK" if connected else "NO SERIAL"
+            st = "OK" if connected else "WAITING"
             title = (
-                f"IMU [{st}] cal {cal[0]}/{cal[1]}/{cal[2]}/{cal[3]} | "
+                f"IMU [{st}] {pps_display:.0f} pkt/s | "
+                f"cal {cal[0]}/{cal[1]}/{cal[2]}/{cal[3]} | "
                 f"h={euler[0]:.0f} r={euler[1]:.0f} p={euler[2]:.0f} | R reset ESC quit"
             )
             glfw.set_window_title(window, title[:250])
 
         if console_interval and (now - last_console) >= console_interval:
             last_console = now
+            st = "OK" if connected else "WAITING"
             print(
                 f"q=({quat_work[0]:+.3f},{quat_work[1]:+.3f},{quat_work[2]:+.3f},{quat_work[3]:+.3f}) "
-                f"euler=({euler[0]:.1f},{euler[1]:.1f},{euler[2]:.1f}) cal={cal} {st}"
+                f"euler=({euler[0]:.1f},{euler[1]:.1f},{euler[2]:.1f}) cal={cal} {pps_display:.0f}pps {st}"
             )
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -410,13 +471,13 @@ def main():
 
         glPushMatrix()
         glMultMatrixf(rot_mat)
-        mesh.draw()
+        mesh_obj.draw()
         glPopMatrix()
 
         glfw.swap_buffers(window)
         glfw.poll_events()
 
-    mesh.delete()
+    mesh_obj.delete()
     reader.stop()
     glfw.terminate()
     sys.exit(0)

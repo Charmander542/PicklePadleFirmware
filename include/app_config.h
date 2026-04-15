@@ -54,13 +54,18 @@ constexpr uint32_t kImuI2cHz = 100000;
 // when WiFi + clock-stretch contend.
 constexpr uint32_t kImuReadClockHz = 50000;
 
+// Fast clock for tutorial streaming. BNO055 supports 400 kHz; use it when flooding UDP.
+constexpr uint32_t kImuFastClockHz = 400000;
+
 // Wire combined write+read timeout (ms) per transaction while reading the IMU.
 constexpr uint16_t kImuWireTimeoutMs = 1000;
+// Tight timeout for the tutorial flood path (single attempt; move on if bus hiccups).
+constexpr uint16_t kImuFastWireTimeoutMs = 50;
 
 // IMU poll intervals (ms).
 constexpr uint32_t kGameplayImuPeriodMs = 20;  // faster sampling → quicker impulse detection (was 50).
-// Tutorial CSV / UDP stream (linear + Euler per row). ~6 ms ≈ 166 Hz; lower = faster but more I²C + Wi‑Fi load.
-constexpr uint32_t kTutorialImuPeriodMs = 6;
+// Tutorial flood: 0 = fire as fast as I²C allows (~200–500 Hz depending on bus + WiFi load).
+constexpr uint32_t kTutorialImuPeriodMs = 0;
 
 // Button timing (ms).
 constexpr uint32_t kButtonDebounceMs = 45;

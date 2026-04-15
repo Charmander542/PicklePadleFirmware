@@ -117,6 +117,28 @@ static void imuReadEuler(Vec3 *out) {
     Wire.setClock(kImuI2cHz);
 }
 
+/**
+ * Blast read for tutorial flood: quat + euler + cal in ONE lock scope at 400 kHz.
+ * No mux disable per call (done once at mode entry), no clock restore.
+ */
+struct ImuSnapshot {
+    float qw, qx, qy, qz;
+    float ex, ey, ez;
+    uint8_t calSys, calGyro, calAccel, calMag;
+};
+
+static void imuReadSnapshotFast(ImuSnapshot *s) {
+    I2cBusLock lk;
+    Wire.setClock(kImuFastClockHz);
+    Wire.setTimeOut(kImuFastWireTimeoutMs);
+    imu::Quaternion q = gBno.getQuat();
+    s->qw = (float)q.w(); s->qx = (float)q.x();
+    s->qy = (float)q.y(); s->qz = (float)q.z();
+    imu::Vector<3> ev = gBno.getVector(Adafruit_BNO055::VECTOR_EULER);
+    s->ex = (float)ev.x(); s->ey = (float)ev.y(); s->ez = (float)ev.z();
+    gBno.getCalibration(&s->calSys, &s->calGyro, &s->calAccel, &s->calMag);
+}
+
 #if !PICKLE_PRODUCTION
 /** Always prints to Serial; mirrors to SD when the logger mounted successfully. */
 static void bootLog(const char *line) {
@@ -173,15 +195,11 @@ static void drainUiEvents() {
             gDisp.showTwoLines("Mode", "Gameplay");
             break;
         case UiEvent::ModeTutorial:
-            if (SdLogger::instance().ok()) SdLogger::instance().log("mode: tutorial");
-            gJerk.configure(kTutorialJerkThreshold, kTutorialJerkRetriggerMs, kTutorialJerkLpfAlpha);
+            if (SdLogger::instance().ok()) SdLogger::instance().log("mode: tutorial (flood)");
             setRunMode(RunMode::Tutorial);
-            gJerk.reset();
             applyWifiStreamingBoost();
-            gDisp.showTwoLines("Mode", "Tutorial");
-            SdLogger::serialPrintln("rot_x,rot_y,rot_z,button,impulse");
-            if (SdLogger::instance().ok())
-                SdLogger::instance().log("csv_hdr rot_x,rot_y,rot_z,button,impulse");
+            gDisp.showTwoLines("Mode", "Tutorial FLOOD");
+            SdLogger::serialPrintln("[tutorial] entering flood mode — Q,w,x,y,z,ex,ey,ez,cal,btn");
             break;
         }
     }
@@ -233,6 +251,73 @@ static void pollButton(RunMode mode) {
     }
 }
 
+/**
+ * Tutorial flood loop — runs on core 1, reads IMU as fast as I²C allows and
+ * fires a UDP packet each iteration.  No serial print, no SD log, no jerk
+ * detection, no queue — just imuReadSnapshotFast → snprintf → sendFast.
+ * Button state is polled every iteration (digitalRead is ~0.5 µs on ESP32).
+ * Exits back to the normal appTask loop when mode changes away from Tutorial.
+ */
+static void tutorialFloodLoop() {
+    {   // Disable mux branches once (not per read).
+        I2cBusLock lk;
+        gMux.disableMuxBranches();
+    }
+
+    ImuSnapshot snap{};
+    char pkt[128];
+
+    for (;;) {
+        // Check for mode change (net task pushes events via queue).
+        {
+            UiEventMsg ev;
+            while (xQueueReceive(g_uiEventQueue, &ev, 0) == pdTRUE) {
+                switch (ev.kind) {
+                case UiEvent::ModeIdle:
+                    s_showPaddleIpUntilUeIdle = false;
+                    setRunMode(RunMode::Idle);
+                    applyWifiIdleRadio();
+                    renderIdleUi();
+                    return;
+                case UiEvent::ModeGameplay:
+                    gJerk.configure(kGameplayJerkThreshold, kGameplayJerkRetriggerMs, kGameplayJerkLpfAlpha);
+                    setRunMode(RunMode::Gameplay);
+                    gJerk.reset();
+                    applyWifiStreamingBoost();
+                    gDisp.showTwoLines("Mode", "Gameplay");
+                    return;
+                case UiEvent::ModeTutorial:
+                    break; // already in tutorial
+                case UiEvent::SwingHitHost:
+                    break; // ignore FX in flood mode
+                }
+            }
+        }
+
+        // Fast button poll (no debounce logic — just sample state).
+        const int btn = (digitalRead(BUTTON_PIN) == LOW) ? 1 : 0;
+
+        if (!s_imuReady) {
+            vTaskDelay(1);
+            continue;
+        }
+
+        imuReadSnapshotFast(&snap);
+
+        const int len = snprintf(pkt, sizeof(pkt),
+            "Q,%.5f,%.5f,%.5f,%.5f,%.1f,%.1f,%.1f,%u,%u,%u,%u,%d",
+            snap.qw, snap.qx, snap.qy, snap.qz,
+            snap.ex, snap.ey, snap.ez,
+            snap.calSys, snap.calGyro, snap.calAccel, snap.calMag,
+            btn);
+
+        gNet.sendFast(pkt, (uint16_t)len);
+
+        // Minimal yield so the RTOS can service WiFi and the net task can handle RX.
+        taskYIELD();
+    }
+}
+
 static void appTask(void * /*param*/) {
     gJerk.configure(kGameplayJerkThreshold, kGameplayJerkRetriggerMs, kGameplayJerkLpfAlpha);
     uint32_t lastImu = 0;
@@ -243,48 +328,35 @@ static void appTask(void * /*param*/) {
         const RunMode mode = getRunMode();
         pollButton(mode);
 
-        if (s_imuReady && (mode == RunMode::Gameplay || mode == RunMode::Tutorial)) {
+        if (mode == RunMode::Tutorial && s_imuReady) {
+            tutorialFloodLoop();
+            lastImu = 0;
+            continue;
+        }
+
+        if (s_imuReady && mode == RunMode::Gameplay) {
             const uint32_t now = millis();
-            const uint32_t imuPeriodMs =
-                (mode == RunMode::Tutorial) ? kTutorialImuPeriodMs : kGameplayImuPeriodMs;
-            if (now - lastImu >= imuPeriodMs) {
+            if (now - lastImu >= kGameplayImuPeriodMs) {
                 lastImu = now;
                 Vec3 a;
                 imuReadLinear(&a);
                 const uint32_t nowUs = micros();
-                if (mode == RunMode::Gameplay) {
-                    if (gJerk.update(a, nowUs)) {
-                        const float j = gJerk.lastJerkMagnitude();
-                        SdLogger::serialPrintf(
-                            "[imu] tx linear_accel m/s^2 x=%.3f y=%.3f z=%.3f  jerk=%.1f m/s^3\n",
-                            a.x, a.y, a.z, j);
-                        char buf[48];
-                        snprintf(buf, sizeof(buf), "%.1f", j);
-                        if (SdLogger::instance().ok())
-                            SdLogger::instance().logf("impulse tx %s", buf);
-                        if (!gNet.trySendImmediate(buf)) {
-                            gNet.postText(buf);
-                        }
-                    }
-                } else {
-                    const bool trig = gJerk.update(a, nowUs);
+                if (gJerk.update(a, nowUs)) {
                     const float j = gJerk.lastJerkMagnitude();
-                    const float impulseCol =
-                        (trig || j >= kTutorialJerkThreshold) ? j : 0.f;
-                    Vec3 e{};
-                    imuReadEuler(&e);
-                    const int btn =
-                        (digitalRead(BUTTON_PIN) == HIGH) ? 1 : 0;
-                    char line[96];
-                    snprintf(line, sizeof(line), "%.3f,%.3f,%.3f,%d,%.3f", e.x, e.y, e.z, btn,
-                             impulseCol);
-                    SdLogger::serialPrintln(line);
-                    gNet.postText(line);
+                    SdLogger::serialPrintf(
+                        "[imu] tx linear_accel m/s^2 x=%.3f y=%.3f z=%.3f  jerk=%.1f m/s^3\n",
+                        a.x, a.y, a.z, j);
+                    char buf[48];
+                    snprintf(buf, sizeof(buf), "%.1f", j);
+                    if (SdLogger::instance().ok())
+                        SdLogger::instance().logf("impulse tx %s", buf);
+                    if (!gNet.trySendImmediate(buf)) {
+                        gNet.postText(buf);
+                    }
                 }
             }
         }
 
-        // 1 tick ≈ minimal yield; IMU work is gated by imuPeriodMs (matches ~20 ms loop sketches).
         vTaskDelay(1);
     }
 }

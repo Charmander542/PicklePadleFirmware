@@ -33,6 +33,39 @@ bool NetUdp::trySendImmediate(const char *msg) {
     return ok;
 }
 
+bool NetUdp::sendFast(const char *msg, uint16_t len) {
+    if (xSemaphoreTake(udpMu_, pdMS_TO_TICKS(2)) != pdTRUE) return false;
+
+    IPAddress ip;
+    uint16_t port;
+    if (xSemaphoreTake(g_stateMutex, 0) == pdTRUE) {
+        ip = g_hostAddr;
+        port = g_hostPort;
+        xSemaphoreGive(g_stateMutex);
+    } else {
+        xSemaphoreGive(udpMu_);
+        return false;
+    }
+
+    bool ok = false;
+    if (port != 0 && ip != IPAddress(0, 0, 0, 0)) {
+        if (udp_.beginPacket(ip, port)) {
+            udp_.write((const uint8_t *)msg, len);
+            ok = (udp_.endPacket() > 0);
+        }
+    }
+    xSemaphoreGive(udpMu_);
+    return ok;
+}
+
+void NetUdp::cacheRemote(IPAddress &outIp, uint16_t &outPort) {
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        outIp = g_hostAddr;
+        outPort = g_hostPort;
+        xSemaphoreGive(g_stateMutex);
+    }
+}
+
 bool NetUdp::sendPacketLocked_(const char *msg) {
     if (!msg || msg[0] == 0) return false;
     if (WiFi.status() != WL_CONNECTED) return false;
@@ -93,12 +126,10 @@ void NetUdp::service() {
     }
 
     // Drain a bounded burst per tick so lwIP can free pbufs (errno 12 / ENOMEM if we spam).
-    // Tutorial mode pushes many rows/sec; keep burst high enough to empty the queue each cycle.
-    constexpr UBaseType_t kMaxTxPerService = 28;
+    constexpr UBaseType_t kMaxTxPerService = 64;
     for (UBaseType_t tx = 0; tx < kMaxTxPerService; ++tx) {
         NetOutgoingMsg m;
         if (xQueueReceive(g_netTxQueue, &m, 0) != pdTRUE) break;
-        if (SdLogger::instance().ok()) SdLogger::instance().logf("udp tx: %s", m.text);
         sendPacketLocked_(m.text);
     }
 
