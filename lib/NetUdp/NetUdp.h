@@ -22,10 +22,15 @@ public:
     // Snapshot host addr+port into caller-local storage once (avoids g_stateMutex per packet).
     void cacheRemote(IPAddress &outIp, uint16_t &outPort);
 
+    // Tear down and re-open the UDP socket (call from net task only).
+    void reinitSocket();
+
 private:
     bool sendPacket_(const char *msg);
     void rememberRemoteIp_(const IPAddress &ip);
 
     WiFiUDP     udp_;
     uint16_t localPort_{0};
+    uint16_t consecutiveSendFails_{0};
+    bool     wasConnected_{true};
 };

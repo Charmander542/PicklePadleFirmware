@@ -48,6 +48,10 @@ constexpr unsigned kNetUdpTxDrainPerTick = 12;
 // Hard cap on RX datagrams per service() tick — avoids starving TX if the host floods UDP.
 constexpr unsigned kNetUdpRxMaxPerTick = 24;
 
+// Consecutive sendPacket_ failures before the net task tears down and re-opens the UDP socket.
+// Handles silent socket corruption after WiFi radio reconfiguration on some ESP32 modules.
+constexpr unsigned kNetSendFailReinitThreshold = 6;
+
 // Wi‑Fi power shaping: low TX power during association (reduces peak current / brownout risk), then ramp up.
 constexpr int8_t kWifiConnectTxPowerDbm = 2;
 // Default STA TX after connect (idle / low duty). Gameplay & tutorial bump to kWifiStreamingTxPowerDbm.
@@ -95,7 +99,7 @@ constexpr uint32_t kWifiForgetHoldMs = 5000;
 
 constexpr float kGameplayJerkThreshold = 22.f;
 // Minimum ms between gameplay acceleration-trigger events.
-constexpr uint32_t kGameplayJerkRetriggerMs = 500;
+constexpr uint32_t kGameplayJerkRetriggerMs = 800;
 
 // Higher = IMU filter tracks sudden accel faster (0.01–1). Gameplay uses a snappier filter than before (0.2).
 constexpr float kGameplayJerkLpfAlpha = 0.42f;

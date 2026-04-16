@@ -117,7 +117,15 @@ static void dispatchHostLine_(char *line) {
 
 bool NetUdp::begin(uint16_t localPort) {
     localPort_ = localPort;
+    consecutiveSendFails_ = 0;
+    wasConnected_ = (WiFi.status() == WL_CONNECTED);
     return udp_.begin(localPort_) == 1;
+}
+
+void NetUdp::reinitSocket() {
+    udp_.stop();
+    udp_.begin(localPort_);
+    consecutiveSendFails_ = 0;
 }
 
 void NetUdp::setRemote(const IPAddress &ip, uint16_t port) {
@@ -183,6 +191,13 @@ bool NetUdp::sendPacket_(const char *msg) {
 }
 
 void NetUdp::service() {
+    // Detect WiFi drop → reconnect: reinit the socket so lwIP state is clean.
+    const bool connected = (WiFi.status() == WL_CONNECTED);
+    if (connected && !wasConnected_) {
+        reinitSocket();
+    }
+    wasConnected_ = connected;
+
     for (unsigned pkt = 0; pkt < kNetUdpRxMaxPerTick; ++pkt) {
         const int n = udp_.parsePacket();
         if (n <= 0) {
@@ -201,6 +216,14 @@ void NetUdp::service() {
         if (xQueueReceive(g_netTxQueue, &m, 0) != pdTRUE) {
             break;
         }
-        sendPacket_(m.text);
+        if (sendPacket_(m.text)) {
+            consecutiveSendFails_ = 0;
+        } else {
+            ++consecutiveSendFails_;
+            if (consecutiveSendFails_ >= kNetSendFailReinitThreshold) {
+                reinitSocket();
+                break;
+            }
+        }
     }
 }
