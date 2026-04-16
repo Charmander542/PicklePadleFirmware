@@ -4,8 +4,21 @@
 
 static const char kHtml[] PROGMEM = R"rawliteral(
 <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width"/>
-<title>PicklePaddle WiFi</title></head><body>
+<title>PicklePaddle WiFi</title>
+<script>
+function setStarry() {
+    document.querySelector('input[name="ssid"]').value = 'Starry15078';
+    document.querySelector('input[name="pass"]').value = '12345678';
+}
+function setBUGuest() {
+    document.querySelector('input[name="ssid"]').value = 'BU Guest (Unencrypted)';
+    document.querySelector('input[name="pass"]').value = '';
+}
+</script>
+</head><body>
 <h2>PicklePaddle setup</h2>
+<p><button onclick="setStarry()">Use Starry Network Preset</button></p>
+<p><button onclick="setBUGuest()">Use BU Guest Network Preset</button></p>
 <form method="POST" action="/save">
 <p>SSID<br><input name="ssid" value="BU Guest (unencrypted)" style="width:90%"/></p>
 <p>Password (empty for open)<br><input name="pass" type="password" style="width:90%"/></p>
