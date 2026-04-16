@@ -32,9 +32,21 @@ constexpr uint16_t kDefaultHostPort = 4210;
 constexpr uint16_t kLocalUdpPort = 4211;
 constexpr char kSdLogPath[] = "/PADDLE.LOG";  // 8.3 filename required by current FatFs config
 
-// FreeRTOS: equal priority avoids starving UDP RX (gameplay mode) vs IMU loop.
+// Net slightly above app so UDP RX / command enqueue runs under IMU+sendFast load.
 constexpr uint8_t kAppTaskPriority = 4;
-constexpr uint8_t kNetTaskPriority = 4;
+constexpr uint8_t kNetTaskPriority = 5;
+// Host “swing hit” LED + haptic worker: below app/net so gameplay IMU + UDP stay responsive.
+constexpr uint8_t kSwingFxTaskPriority = 3;
+constexpr uint32_t kSwingFxTaskStackBytes = 4096;
+constexpr unsigned kSwingFxQueueDepth = 4;
+
+// UI events from UDP / net task — must not drop mode changes when app task is busy (tutorial flood).
+constexpr unsigned kUiEventQueueDepth = 128;
+
+// Cap TX drain per service() tick so outbound bursts do not monopolize command receive.
+constexpr unsigned kNetUdpTxDrainPerTick = 12;
+// Hard cap on RX datagrams per service() tick — avoids starving TX if the host floods UDP.
+constexpr unsigned kNetUdpRxMaxPerTick = 24;
 
 // Wi‑Fi power shaping: low TX power during association (reduces peak current / brownout risk), then ramp up.
 constexpr int8_t kWifiConnectTxPowerDbm = 2;
@@ -42,7 +54,12 @@ constexpr int8_t kWifiConnectTxPowerDbm = 2;
 constexpr int8_t kWifiRunTxPowerDbm = 15;
 // Max practical STA TX for streaming modes (hardware clamps to chipset max, typically ~19.5 dBm on ESP32).
 constexpr int8_t kWifiStreamingTxPowerDbm = 19;
-constexpr uint32_t kWifiPowerRampStepDelayMs = 700;
+
+// Milliseconds between each STA TX-power step after association (keep small; full seconds of ramp
+// was easy to mis-trigger as “WiFi broken” and delays boot unacceptably).
+constexpr uint32_t kWifiTxPowerRampStepMs = 60;
+// Short pause after DHCP before applying idle radio (modem sleep off, run TX); brownout cushion.
+constexpr uint32_t kWifiPostConnectSettleMs = 280;
 
 // BNO055: SA0 low → 0x28, SA0 high → 0x29 (Adafruit “address B”). Your working sketch used 0x29.
 constexpr uint8_t kBno055I2cAddr = 0x29;
@@ -71,14 +88,14 @@ constexpr uint32_t kTutorialImuPeriodMs = 2;
 constexpr uint32_t kButtonDebounceMs = 12;
 constexpr uint32_t kButtonHoldMs = 650;
 // Idle only: hold this long to erase saved Wi‑Fi and reboot into setup portal (PicklePaddle-Setup).
-constexpr uint32_t kWifiForgetHoldMs = 8000;
+constexpr uint32_t kWifiForgetHoldMs = 5000;
 
-// Gameplay: jerk threshold (m/s^3). Production ballpark is often ~1e3–1e4; lowered a lot for bench testing
-// (tap the paddle gently). Raise before shipping.
+// Gameplay trigger threshold for |linear acceleration| magnitude (m/s^2).
+// Lower for bench testing (gentle taps), raise for real gameplay.
 
-constexpr float kGameplayJerkThreshold = 35.f;
-// Minimum ms between transmitted impulses (debounce).
-constexpr uint32_t kGameplayJerkRetriggerMs = 1000;
+constexpr float kGameplayJerkThreshold = 22.f;
+// Minimum ms between gameplay acceleration-trigger events.
+constexpr uint32_t kGameplayJerkRetriggerMs = 500;
 
 // Higher = IMU filter tracks sudden accel faster (0.01–1). Gameplay uses a snappier filter than before (0.2).
 constexpr float kGameplayJerkLpfAlpha = 0.42f;

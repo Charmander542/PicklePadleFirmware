@@ -139,11 +139,7 @@ bool WifiPortal::connectSta(DisplayManager *disp, NeoPixelStrip *leds) {
         delay(80);
     }
 
-    if (WiFi.status() == WL_CONNECTED) {
-        return true;
-    }
-
-    if (strcmp(kFallbackSsid, ssid.c_str()) != 0) {
+    if (WiFi.status() != WL_CONNECTED && strcmp(kFallbackSsid, ssid.c_str()) != 0) {
         if (disp) disp->showTwoLines("Retry open", kFallbackSsid);
         WiFi.disconnect();
         delay(200);
@@ -164,9 +160,8 @@ bool WifiPortal::connectSta(DisplayManager *disp, NeoPixelStrip *leds) {
 
     const bool ok = WiFi.status() == WL_CONNECTED;
     if (ok) {
-        rampWifiTxPower_(kWifiConnectTxPowerDbm, kWifiRunTxPowerDbm, kWifiPowerRampStepDelayMs);
-    }
-    if (!ok && leds) {
+        rampWifiTxPower_(kWifiConnectTxPowerDbm, kWifiRunTxPowerDbm, kWifiTxPowerRampStepMs);
+    } else if (leds) {
         leds->resetWifiLedAnim();
         leds->clear();
     }

@@ -11,7 +11,7 @@ Usage:
     # Serial (imu_visualizer firmware):
     python imu_viewer.py COM5 --stl Paddle.stl
 
-    # UDP (main paddle firmware, tutorial flood mode):
+    # UDP (main paddle firmware: tutorial flood and gameplay use ex,ey,ez,btn,impulse):
     python imu_viewer.py --udp 4210 --stl Paddle.stl
 """
 

@@ -47,6 +47,30 @@ static void swingHitAudioTask(void * /*param*/) {
     vTaskDelete(nullptr);
 }
 
+/** Queue depth kSwingFxQueueDepth: non-blocking post from net/app; worker plays LED then haptics. */
+static QueueHandle_t g_swingFxQueue = nullptr;
+
+static void swingFxWorkerTask(void * /*param*/) {
+    uint8_t tick;
+    for (;;) {
+        if (xQueueReceive(g_swingFxQueue, &tick, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        // NeoPixel first (no I²C) so feedback starts immediately; then DRV path (longer, bus-heavy).
+        gStrip.playBallHit();
+        paddleFx_playSteps(gMux, kFxBallHitHaptic, PADDLE_FX_STEP_COUNT(kFxBallHitHaptic));
+    }
+}
+
+/** Enqueue swing-hit LED + haptic work; never blocks the caller (drops if queue full). */
+static void queueSwingHostFx() {
+    if (!g_swingFxQueue) {
+        return;
+    }
+    uint8_t one = 1;
+    (void)xQueueSend(g_swingFxQueue, &one, 0);
+}
+
 static void triggerSwingHitAudioAsync() {
     bool canStart = false;
     portENTER_CRITICAL(&s_swingAudioMux);
@@ -85,28 +109,26 @@ static wifi_power_t mapDbmToWifiPower(int8_t dbm) {
     return WIFI_POWER_19_5dBm;
 }
 
-/** Highest throughput / range for UDP streaming (gameplay & tutorial). AP must support HT40 for 40 MHz. */
+/**
+ * Streaming / gameplay: higher TX + no modem sleep. Intentionally does NOT call
+ * esp_wifi_set_protocol / esp_wifi_set_bandwidth while associated — those often force
+ * a link teardown (wifi: state run -> init) on home APs right after the first mode command.
+ */
 static void applyWifiStreamingBoost() {
     if (WiFi.status() != WL_CONNECTED) return;
 
     WiFi.setSleep(false);
     WiFi.setTxPower(mapDbmToWifiPower(kWifiStreamingTxPowerDbm));
     (void)esp_wifi_set_ps(WIFI_PS_NONE);
-    (void)esp_wifi_set_protocol(WIFI_IF_STA,
-                                WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
-    if (esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT40) != ESP_OK) {
-        (void)esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
-    }
 }
 
-/** Restore calmer radio when returning to idle (saves power / neighbor-friendlier than HT40). */
+/** Idle: lower TX than streaming; keep PS_NONE so UDP command wake stays responsive. */
 static void applyWifiIdleRadio() {
     if (WiFi.status() != WL_CONNECTED) return;
 
     WiFi.setSleep(false);
     WiFi.setTxPower(mapDbmToWifiPower(kWifiRunTxPowerDbm));
     (void)esp_wifi_set_ps(WIFI_PS_NONE);
-    (void)esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
 }
 
 static bool imuBeginAdafruit() {
@@ -139,16 +161,20 @@ static void imuReadLinear(Vec3 *out) {
     Wire.setClock(kImuI2cHz);
 }
 
-/** Euler angles in degrees (BNO055: heading, roll, pitch). */
-static void imuReadEuler(Vec3 *out) {
+/** One bus lock: linear accel (jerk) + Euler degrees — same CSV row shape as tutorial flood. */
+static void imuReadLinearEuler(Vec3 *linearOut, Vec3 *eulerOut) {
     I2cBusLock lk;
     gMux.disableMuxBranches();
     Wire.setTimeOut(kImuWireTimeoutMs);
     Wire.setClock(kImuReadClockHz);
+    imu::Vector<3> la = gBno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
+    linearOut->x = (float)la.x();
+    linearOut->y = (float)la.y();
+    linearOut->z = (float)la.z();
     imu::Vector<3> ev = gBno.getVector(Adafruit_BNO055::VECTOR_EULER);
-    out->x = (float)ev.x();
-    out->y = (float)ev.y();
-    out->z = (float)ev.z();
+    eulerOut->x = (float)ev.x();
+    eulerOut->y = (float)ev.y();
+    eulerOut->z = (float)ev.z();
     Wire.setClock(kImuI2cHz);
 }
 
@@ -162,6 +188,14 @@ struct ImuSnapshot {
     float ax, ay, az;
     uint8_t calSys, calGyro, calAccel, calMag;
 };
+
+/** After tutorial flood (400 kHz / short timeout), restore bus for OLED/mux + gameplay IMU reads. */
+static void restoreImuWireAfterTutorialBurst() {
+    I2cBusLock lk;
+    gMux.disableMuxBranches();
+    Wire.setClock(kImuI2cHz);
+    Wire.setTimeOut(kImuWireTimeoutMs);
+}
 
 static void imuReadSnapshotFast(ImuSnapshot *s) {
     I2cBusLock lk;
@@ -213,8 +247,7 @@ static void drainUiEvents() {
         case UiEvent::SwingHitHost:
             if (SdLogger::instance().ok()) SdLogger::instance().log("event: swing hit (host)");
             triggerSwingHitAudioAsync();
-            paddleFx_playSteps(gMux, kFxBallHitHaptic, PADDLE_FX_STEP_COUNT(kFxBallHitHaptic));
-            gStrip.playBallHit();
+            queueSwingHostFx();
             break;
         case UiEvent::ModeIdle:
             if (SdLogger::instance().ok()) SdLogger::instance().log("mode: idle");
@@ -233,7 +266,7 @@ static void drainUiEvents() {
             break;
         case UiEvent::ModeTutorial:
             if (SdLogger::instance().ok()) SdLogger::instance().log("mode: tutorial (flood)");
-            gJerk.configure(kGameplayJerkThreshold, kGameplayJerkRetriggerMs, kGameplayJerkLpfAlpha);
+            gJerk.configure(kTutorialJerkThreshold, kTutorialJerkRetriggerMs, kTutorialJerkLpfAlpha);
             setRunMode(RunMode::Tutorial);
             gJerk.reset();
             applyWifiStreamingBoost();
@@ -307,9 +340,9 @@ static void pollButton(RunMode mode) {
 
 /**
  * Tutorial flood loop — runs on core 1, reads IMU as fast as I²C allows and
- * fires a UDP packet each iteration.  No serial print, no SD log, no jerk
- * detection, no queue — just imuReadSnapshotFast → snprintf → sendFast.
- * Button state is polled every iteration (digitalRead is ~0.5 µs on ESP32).
+ * fires a UDP packet each iteration.  Does not use gJerk: sharing the same
+ * JerkDetector at ~kHz tutorial rates corrupts prevUs_/filter state and breaks
+ * gameplay jerk + UDP after switching modes.  Impulse column is always 0 here.
  * Exits back to the normal appTask loop when mode changes away from Tutorial.
  */
 static void tutorialFloodLoop() {
@@ -328,12 +361,14 @@ static void tutorialFloodLoop() {
             while (xQueueReceive(g_uiEventQueue, &ev, 0) == pdTRUE) {
                 switch (ev.kind) {
                 case UiEvent::ModeIdle:
+                    restoreImuWireAfterTutorialBurst();
                     s_showPaddleIpUntilUeIdle = false;
                     setRunMode(RunMode::Idle);
                     applyWifiIdleRadio();
                     renderIdleUi();
                     return;
                 case UiEvent::ModeGameplay:
+                    restoreImuWireAfterTutorialBurst();
                     gJerk.configure(kGameplayJerkThreshold, kGameplayJerkRetriggerMs, kGameplayJerkLpfAlpha);
                     setRunMode(RunMode::Gameplay);
                     gJerk.reset();
@@ -343,7 +378,9 @@ static void tutorialFloodLoop() {
                 case UiEvent::ModeTutorial:
                     break; // already in tutorial
                 case UiEvent::SwingHitHost:
-                    break; // ignore FX in flood mode
+                    triggerSwingHitAudioAsync();
+                    queueSwingHostFx();
+                    break;
                 case UiEvent::SetIdleColor:
                     break; // ignore manual color commands in tutorial mode
                 }
@@ -360,16 +397,14 @@ static void tutorialFloodLoop() {
 
         imuReadSnapshotFast(&snap);
 
-        Vec3 accel = {snap.ax, snap.ay, snap.az};
-        const bool jerkTriggered = gJerk.update(accel, micros());
-        const float impulse = jerkTriggered ? gJerk.lastJerkMagnitude() : 0.0f;
+        const float impulse = 0.f;
 
-        const int len = snprintf(pkt, sizeof(pkt),
-            "%.1f,%.1f,%.1f,%d,%.1f",
-            snap.ex, snap.ey, snap.ez,
-            btn, impulse);
+        (void)snprintf(pkt, sizeof(pkt),
+                       "%.1f,%.1f,%.1f,%d,%.1f",
+                       snap.ex, snap.ey, snap.ez,
+                       btn, impulse);
 
-        gNet.sendFast(pkt, (uint16_t)len);
+        (void)gNet.postText(pkt);
 
         // Keep tutorial very fast while avoiding an unrestricted flood.
         if (kTutorialImuPeriodMs > 0) {
@@ -383,8 +418,25 @@ static void tutorialFloodLoop() {
 static void appTask(void * /*param*/) {
     gJerk.configure(kGameplayJerkThreshold, kGameplayJerkRetriggerMs, kGameplayJerkLpfAlpha);
     uint32_t lastImu = 0;
+    uint32_t lastGameplayAccelTxMs = 0;
 
     for (;;) {
+#if !PICKLE_PRODUCTION
+        static uint32_t s_lastDropCount = 0;
+        static uint32_t s_lastDropLogMs = 0;
+        const uint32_t drops = g_netUiEnqueueDrops;
+        if (drops != s_lastDropCount) {
+            const uint32_t delta = drops - s_lastDropCount;
+            s_lastDropCount = drops;
+            const uint32_t t = millis();
+            if (t - s_lastDropLogMs >= 400u || delta >= 3u) {
+                s_lastDropLogMs = t;
+                SdLogger::serialPrintf(
+                    "[net] UDP→UI queue dropped %lu (total %lu) — PC commands may be missed\n",
+                    (unsigned long)delta, (unsigned long)drops);
+            }
+        }
+#endif
         drainUiEvents();
 
         const RunMode mode = getRunMode();
@@ -400,21 +452,28 @@ static void appTask(void * /*param*/) {
             const uint32_t now = millis();
             if (now - lastImu >= kGameplayImuPeriodMs) {
                 lastImu = now;
-                Vec3 a;
-                imuReadLinear(&a);
-                const uint32_t nowUs = micros();
-                if (gJerk.update(a, nowUs)) {
-                    const float j = gJerk.lastJerkMagnitude();
+                Vec3 a, euler;
+                imuReadLinearEuler(&a, &euler);
+                (void)euler;
+                const float accelMag = sqrtf(a.x * a.x + a.y * a.y + a.z * a.z);
+                if (accelMag >= kGameplayJerkThreshold &&
+                    (lastGameplayAccelTxMs == 0 ||
+                     (now - lastGameplayAccelTxMs) >= kGameplayJerkRetriggerMs)) {
+                    lastGameplayAccelTxMs = now;
+                    const float impulse = accelMag;
+                    char pkt[24];
+                    (void)snprintf(pkt, sizeof(pkt), "%.1f", impulse);
+#if !PICKLE_PRODUCTION
                     SdLogger::serialPrintf(
-                        "[imu] tx linear_accel m/s^2 x=%.3f y=%.3f z=%.3f  jerk=%.1f m/s^3\n",
-                        a.x, a.y, a.z, j);
-                    char buf[48];
-                    const int len = snprintf(buf, sizeof(buf), "%.1f", j);
-                    if (SdLogger::instance().ok())
-                        SdLogger::instance().logf("impulse tx %s", buf);
-                    if (!gNet.sendFast(buf, (uint16_t)len)) {
-                        gNet.postText(buf);
+                        "[imu] tx linear_accel m/s^2 x=%.3f y=%.3f z=%.3f  accel|a|=%.1f m/s^2\n",
+                        a.x, a.y, a.z, impulse);
+                    if (SdLogger::instance().ok()) {
+                        char jbuf[32];
+                        snprintf(jbuf, sizeof(jbuf), "%.1f", impulse);
+                        SdLogger::instance().logf("impulse tx %s", jbuf);
                     }
+#endif
+                    (void)gNet.postText(pkt);
                 }
             }
         }
@@ -525,9 +584,10 @@ void setup() {
     pinMode(BUTTON_PIN, INPUT_PULLUP);
 
     g_stateMutex = xSemaphoreCreateMutex();
-    g_uiEventQueue = xQueueCreate(16, sizeof(UiEventMsg));
+    g_uiEventQueue = xQueueCreate(kUiEventQueueDepth, sizeof(UiEventMsg));
     // Tutorial can stream ~150+ rows/s; larger queue so postText rarely times out under load.
     g_netTxQueue = xQueueCreate(160, sizeof(NetOutgoingMsg));
+    g_swingFxQueue = xQueueCreate(kSwingFxQueueDepth, sizeof(uint8_t));
 
     gMux.beginWire(BUS_SDA, BUS_SCL, 100000);
 
@@ -575,9 +635,9 @@ void setup() {
         if (SdLogger::instance().ok()) SdLogger::instance().log("wifi: connect FAILED");
         delay(2500);
     } else {
-        // Let modem sleep + low TX stay through connect/ramp before another current step.
-        delay(kWifiPowerRampStepDelayMs);
-        WiFi.setSleep(false);  // modem sleep can starve I2C / CPU timing under load
+        // Ramp already raised TX in connectSta; short settle then one idle-radio apply (PS + TX).
+        delay(kWifiPostConnectSettleMs);
+        applyWifiIdleRadio();
         gStrip.showStaConnectedSolid();
         char line[44];
         snprintf(line, sizeof(line), "IP: %s", WiFi.localIP().toString().c_str());
@@ -604,6 +664,10 @@ void setup() {
     constexpr uint32_t kAppStack = 10240;
     xTaskCreatePinnedToCore(netTask, "net", kNetStack, nullptr, kNetTaskPriority, nullptr, 0);
     xTaskCreatePinnedToCore(appTask, "app", kAppStack, nullptr, kAppTaskPriority, nullptr, 1);
+    if (g_swingFxQueue) {
+        xTaskCreatePinnedToCore(swingFxWorkerTask, "swing_fx", kSwingFxTaskStackBytes, nullptr,
+                                kSwingFxTaskPriority, nullptr, 0);
+    }
 }
 
 void loop() {

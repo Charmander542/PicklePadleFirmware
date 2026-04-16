@@ -9,8 +9,8 @@ Configure the paddle's "Host IP" in the WiFi portal to this machine's LAN addres
 No third-party packages (stdlib only).
 
 Paddle → game (logged here)
-  Typical payloads: "detect btn push", "detect btn hold", and gameplay jerk as one float
-  (m/s^3) e.g. "1523.4" — parse that in UE as an impulse.
+  Typical payloads: "detect btn push", "detect btn hold", tutorial/gameplay IMU rows
+  "ex,ey,ez,btn,impulse" (degrees, btn 0/1, impulse m/s^3; gameplay sets impulse only on jerk hits).
 
 Game → paddle (type in this tool or use --send)
   swing hit   → host swing feedback (LED/haptic cue on paddle)

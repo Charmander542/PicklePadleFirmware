@@ -24,13 +24,15 @@ struct UiEventMsg {
 };
 
 struct NetOutgoingMsg {
-  char text[96];
+  char text[160];
 };
 
 // Globals wired in main — network task pushes UiEventMsg; app task consumes.
 extern QueueHandle_t g_uiEventQueue;
 extern QueueHandle_t g_netTxQueue;
 extern SemaphoreHandle_t g_stateMutex;
+/** Incremented when UDP RX cannot enqueue a UiEvent (queue full); check in dev builds. */
+extern volatile uint32_t g_netUiEnqueueDrops;
 
 extern RunMode g_runMode;
 

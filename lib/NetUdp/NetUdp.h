@@ -3,26 +3,16 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>  // WiFiUDP class on ESP32
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
 #include "app_state.h"
 
-// UDP RX + queued TX are serviced from the network task (core 0).
-// trySendImmediate() may be called from the app task for lowest gameplay impulse latency.
+// One owner for the WiFiUDP socket: the net task services RX and drains queued TX.
+// App/UI tasks only enqueue outbound text packets.
 class NetUdp {
 public:
     bool begin(uint16_t localPort);
 
     // Safe from any core: copies into queue for net task.
     bool postText(const char *msg);
-
-    // Same path as net-task send, but from any task (mutex-protected). Skips the TX queue.
-    bool trySendImmediate(const char *msg);
-
-    // Single-attempt, zero-retry, no-logging send for flooding tutorial data.
-    // Caller is on the app task; takes the UDP mutex with a short timeout.
-    // Returns false silently (acceptable packet loss in a flood).
-    bool sendFast(const char *msg, uint16_t len);
 
     // Call only from net task: RX + flush TX queue.
     void service();
@@ -33,10 +23,9 @@ public:
     void cacheRemote(IPAddress &outIp, uint16_t &outPort);
 
 private:
-    // Caller must hold udpMu_. All WiFiUDP use goes through one mutex (net + app tasks).
-    bool sendPacketLocked_(const char *msg);
+    bool sendPacket_(const char *msg);
+    void rememberRemoteIp_(const IPAddress &ip);
 
     WiFiUDP     udp_;
-    SemaphoreHandle_t udpMu_{nullptr};
     uint16_t localPort_{0};
 };

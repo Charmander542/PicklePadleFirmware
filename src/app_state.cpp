@@ -6,6 +6,7 @@
 QueueHandle_t g_uiEventQueue = nullptr;
 QueueHandle_t g_netTxQueue = nullptr;
 SemaphoreHandle_t g_stateMutex = nullptr;
+volatile uint32_t g_netUiEnqueueDrops = 0;
 
 RunMode g_runMode = RunMode::Idle;
 static portMUX_TYPE g_runModeMux = portMUX_INITIALIZER_UNLOCKED;
