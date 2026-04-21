@@ -20,7 +20,7 @@ static const HapticStep kFxBootHaptic[] = {
     {HapticMux::kAllHapticChannels, 14, 320},
 };
 static const HapticStep kFxBallHitHaptic[] = {
-    {HapticMux::kAllHapticChannels, 47, 150}, {HapticMux::kAllHapticChannels, 14, 200},
+    {HapticMux::kAllHapticChannels, 47, 150}, 
 };
 static const HapticStep kFxMenuTick[] = {
     {HapticMux::kAllHapticChannels, 1, 120},

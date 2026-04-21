@@ -8,17 +8,22 @@ static const char kHtml[] PROGMEM = R"rawliteral(
 <script>
 function setStarry() {
     document.querySelector('input[name="ssid"]').value = 'Starry15078';
-    document.querySelector('input[name="pass"]').value = '12345678';
+    document.querySelector('input[name="pass"]').value = 'thytqn';
 }
 function setBUGuest() {
-    document.querySelector('input[name="ssid"]').value = 'BU Guest (Unencrypted)';
+    document.querySelector('input[name="ssid"]').value = 'BU Guest (unencrypted)';
     document.querySelector('input[name="pass"]').value = '';
+}
+function setGrouper() {
+    document.querySelector('input[name="ssid"]').value = 'Grouper';
+    document.querySelector('input[name="pass"]').value = 'smartsys';
 }
 </script>
 </head><body>
 <h2>PicklePaddle setup</h2>
 <p><button onclick="setStarry()">Use Starry Network Preset</button></p>
 <p><button onclick="setBUGuest()">Use BU Guest Network Preset</button></p>
+<p><button onclick="setGrouper()">Use Grouper Network Preset</button></p>
 <form method="POST" action="/save">
 <p>SSID<br><input name="ssid" value="BU Guest (unencrypted)" style="width:90%"/></p>
 <p>Password (empty for open)<br><input name="pass" type="password" style="width:90%"/></p>

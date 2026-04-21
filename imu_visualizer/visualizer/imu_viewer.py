@@ -17,7 +17,6 @@ Usage:
 
 import argparse
 import ctypes
-import math
 import select
 import socket
 import sys
@@ -140,57 +139,30 @@ class StaticInterleavedMesh:
 # ── Packet parser (shared by serial and UDP readers) ───────────────────────
 
 def parse_q_packet(data: bytes, state_lock, state):
-    """Parse packet and update shared state dict under lock."""
-    parts = data.split(b",")
-    if len(parts) == 13 and parts[0] == b"Q":  # old format: Q,w,x,y,z,ex,ey,ez,cal0,cal1,cal2,cal3,btn
-        try:
-            w = float(parts[1])
-            x = float(parts[2])
-            y = float(parts[3])
-            z = float(parts[4])
-            euler = (0.0, 0.0, 0.0)
-            cal = (0, 0, 0, 0)
-            if len(parts) >= 8:
-                euler = (float(parts[5]), float(parts[6]), float(parts[7]))
-            if len(parts) >= 12:
-                cal = (int(parts[8]), int(parts[9]), int(parts[10]), int(parts[11]))
-            with state_lock:
-                state["quat"][:] = (w, x, y, z)
-                state["euler"][:] = euler
-                state["cal"] = cal
-                state["pkt_count"] += 1
-        except (ValueError, IndexError):
-            pass
-    elif len(parts) == 5:  # new tutorial format: ex,ey,ez,btn,impulse
-        try:
-            ex = float(parts[0])
-            ey = float(parts[1])
-            ez = float(parts[2])
-            btn = int(parts[3])
-            impulse = float(parts[4])
-            # Convert euler to quaternion (BNO055: ex=heading/yaw, ey=roll, ez=pitch)
-            yaw = math.radians(ex)
-            pitch = math.radians(ez)
-            roll = math.radians(ey)
-            cy = math.cos(yaw * 0.5)
-            sy = math.sin(yaw * 0.5)
-            cp = math.cos(pitch * 0.5)
-            sp = math.sin(pitch * 0.5)
-            cr = math.cos(roll * 0.5)
-            sr = math.sin(roll * 0.5)
-            w = cr * cp * cy + sr * sp * sy
-            x = sr * cp * cy - cr * sp * sy
-            y = cr * sp * cy + sr * cp * sy
-            z = cr * cp * sy - sr * sp * cy
-            with state_lock:
-                state["quat"][:] = (w, x, y, z)
-                state["euler"][:] = (ex, ey, ez)
-                state["cal"] = (0, 0, 0, 0)  # no cal in new format
-                state["pkt_count"] += 1
-        except (ValueError, IndexError):
-            pass
-    else:
+    """Parse a Q,w,x,y,z,... line and update shared state dict under lock."""
+    if not data.startswith(b"Q,"):
         return
+    parts = data.split(b",")
+    if len(parts) < 5:
+        return
+    try:
+        w = float(parts[1])
+        x = float(parts[2])
+        y = float(parts[3])
+        z = float(parts[4])
+        euler = (0.0, 0.0, 0.0)
+        cal = (0, 0, 0, 0)
+        if len(parts) >= 8:
+            euler = (float(parts[5]), float(parts[6]), float(parts[7]))
+        if len(parts) >= 12:
+            cal = (int(parts[8]), int(parts[9]), int(parts[10]), int(parts[11]))
+        with state_lock:
+            state["quat"][:] = (w, x, y, z)
+            state["euler"][:] = euler
+            state["cal"] = cal
+            state["pkt_count"] += 1
+    except (ValueError, IndexError):
+        pass
 
 
 # ── Serial reader thread ───────────────────────────────────────────────────
