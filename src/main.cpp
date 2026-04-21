@@ -36,13 +36,6 @@ static WifiPortal gPortal;
 static bool s_imuReady = false;
 /** After STA connect, show IP until UE sends UDP `idle` (UiEvent::ModeIdle). */
 static bool s_showPaddleIpUntilUeIdle = true;
-
-/**
- * Deferred WiFi radio config: 0 = none, 1 = idle, 2 = streaming.
- * Written by app task (core 1), consumed by net task (core 0). Avoids cross-core
- * esp_wifi calls that silently corrupt the UDP socket on some ESP32 modules.
- */
-static volatile uint8_t s_pendingRadioMode = 0;
 static portMUX_TYPE s_swingAudioMux = portMUX_INITIALIZER_UNLOCKED;
 static bool s_swingAudioBusy = false;
 
@@ -260,7 +253,7 @@ static void drainUiEvents() {
             if (SdLogger::instance().ok()) SdLogger::instance().log("mode: idle");
             s_showPaddleIpUntilUeIdle = false;
             setRunMode(RunMode::Idle);
-            s_pendingRadioMode = 1;
+            applyWifiIdleRadio();
             renderIdleUi();
             break;
         case UiEvent::ModeGameplay:
@@ -268,7 +261,7 @@ static void drainUiEvents() {
             gJerk.configure(kGameplayJerkThreshold, kGameplayJerkRetriggerMs, kGameplayJerkLpfAlpha);
             setRunMode(RunMode::Gameplay);
             gJerk.reset();
-            s_pendingRadioMode = 2;
+            applyWifiStreamingBoost();
             gDisp.showTwoLines("Mode", "Gameplay");
             break;
         case UiEvent::ModeTutorial:
@@ -276,7 +269,7 @@ static void drainUiEvents() {
             gJerk.configure(kTutorialJerkThreshold, kTutorialJerkRetriggerMs, kTutorialJerkLpfAlpha);
             setRunMode(RunMode::Tutorial);
             gJerk.reset();
-            s_pendingRadioMode = 2;
+            applyWifiStreamingBoost();
             gDisp.showTwoLines("Mode", "Tutorial FLOOD");
             SdLogger::serialPrintln("[tutorial] entering flood mode — ex,ey,ez,btn,impulse");
             break;
@@ -360,6 +353,9 @@ static void tutorialFloodLoop() {
 
     ImuSnapshot snap{};
     char pkt[128];
+    // Local JerkDetector instance so tutorial sampling won't touch shared gJerk state.
+    JerkDetector localJerk;
+    localJerk.configure(kTutorialJerkThreshold, kTutorialJerkRetriggerMs, kTutorialJerkLpfAlpha);
 
     for (;;) {
         // Check for mode change (net task pushes events via queue).
@@ -371,7 +367,7 @@ static void tutorialFloodLoop() {
                     restoreImuWireAfterTutorialBurst();
                     s_showPaddleIpUntilUeIdle = false;
                     setRunMode(RunMode::Idle);
-                    s_pendingRadioMode = 1;
+                    applyWifiIdleRadio();
                     renderIdleUi();
                     return;
                 case UiEvent::ModeGameplay:
@@ -379,7 +375,7 @@ static void tutorialFloodLoop() {
                     gJerk.configure(kGameplayJerkThreshold, kGameplayJerkRetriggerMs, kGameplayJerkLpfAlpha);
                     setRunMode(RunMode::Gameplay);
                     gJerk.reset();
-                    s_pendingRadioMode = 2;
+                    applyWifiStreamingBoost();
                     gDisp.showTwoLines("Mode", "Gameplay");
                     return;
                 case UiEvent::ModeTutorial:
@@ -404,7 +400,15 @@ static void tutorialFloodLoop() {
 
         imuReadSnapshotFast(&snap);
 
-        const float impulse = 0.f;
+        float impulse = 0.f;
+        // Measure jerk from linear accel and always report the current magnitude
+        // (no threshold gating for tutorial flood rows).
+        // (do not gate on threshold in tutorial flood mode).
+        {
+            Vec3 a{snap.ax, snap.ay, snap.az};
+            (void)localJerk.update(a, micros());
+            impulse = localJerk.lastJerkMagnitude();
+        }
 
         (void)snprintf(pkt, sizeof(pkt),
                        "%.1f,%.1f,%.1f,%d,%.1f",
@@ -491,16 +495,6 @@ static void appTask(void * /*param*/) {
 
 static void netTask(void * /*param*/) {
     for (;;) {
-        const uint8_t radio = s_pendingRadioMode;
-        if (radio != 0) {
-            s_pendingRadioMode = 0;
-            if (radio == 1) {
-                applyWifiIdleRadio();
-            } else {
-                applyWifiStreamingBoost();
-            }
-            gNet.reinitSocket();
-        }
         gNet.service();
         vTaskDelay(1);
     }
