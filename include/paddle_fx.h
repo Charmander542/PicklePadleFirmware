@@ -24,15 +24,12 @@ static const HapticStep kFxBallHitHaptic[] = {
 };
 
 // Gameplay "swing" haptic: 3-motor launch-like buzz sequence.
-// Assumes the three haptic motors are on mux channels 0,1,2.
-static const HapticStep kFxSwingHaptic[] = {
-    // Spin-up: staggered light buzz across motors.
-    {0, 1, 55}, {1, 1, 55}, {2, 1, 55},
-    {0, 1, 45}, {1, 1, 45}, {2, 1, 45},
-    // Build: stronger buzz wave.
-    {0, 14, 70}, {1, 14, 70}, {2, 14, 70},
-    // Launch: short punch on each motor.
-    {0, 47, 60}, {1, 47, 60}, {2, 47, 60},
+// Uses a single motor (mux channel 0).
+static const HapticStep kFxSwingHaptic[] = {     
+    {0, 52,400}, 
+    {0, 53,700},
+    
+
 };
 static const HapticStep kFxMenuTick[] = {
     {HapticMux::kAllHapticChannels, 1, 120},
