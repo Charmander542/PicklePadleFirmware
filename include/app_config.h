@@ -94,14 +94,12 @@ constexpr uint32_t kButtonHoldMs = 650;
 // Idle only: hold this long to erase saved Wi‑Fi and reboot into setup portal (PicklePaddle-Setup).
 constexpr uint32_t kWifiForgetHoldMs = 5000;
 
-// Gameplay trigger threshold for |linear acceleration| magnitude (m/s^2).
-// Lower for bench testing (gentle taps), raise for real gameplay.
-
-constexpr float kGameplayJerkThreshold = 22.f;
-// Minimum ms between gameplay acceleration-trigger events.
+// Gameplay: JerkDetector |Δa_filt|/Δt threshold (m/s^3). Tune like tutorial impulse; higher = harder swing to fire.
+constexpr float kGameplayJerkThreshold = 500.f;
+// Minimum ms between gameplay jerk-trigger UDP sends (debounce / re-arm).
 constexpr uint32_t kGameplayJerkRetriggerMs = 800;
 
-// Higher = IMU filter tracks sudden accel faster (0.01–1). Gameplay uses a snappier filter than before (0.2).
+// LPF on linear accel before jerk (0.01–1); higher = faster tracking of sudden accel.
 constexpr float kGameplayJerkLpfAlpha = 0.42f;
 
 // Tutorial streams IMU faster (kTutorialImuPeriodMs): shorter Δt makes |Δa|/Δt smaller per step with the

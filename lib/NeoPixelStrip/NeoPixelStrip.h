@@ -19,6 +19,9 @@ public:
     void playBootSequence();
     void playBallHit();
 
+    /** Set the RGB color used for the swing-hit LED effect. */
+    void setSwingHitColor(uint8_t r, uint8_t g, uint8_t b);
+
     /** Setup AP: back-and-forth “loading” while a phone/PC is joined; idle (off) when none. */
     void tickApPortal(bool stationConnected);
     /** STA: ping-pong while associating to router. */
@@ -35,6 +38,9 @@ private:
     void wifiPingPongFrame_();
 
     Adafruit_NeoPixel strip_;
+    uint8_t swing_r_{64};
+    uint8_t swing_g_{64};
+    uint8_t swing_b_{200};
     uint32_t wifiAnimLastMs_{0};
     int16_t wifiPingPos_{0};
     int8_t wifiPingDir_{1};

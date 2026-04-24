@@ -50,15 +50,34 @@ static void swingHitAudioTask(void * /*param*/) {
 /** Queue depth kSwingFxQueueDepth: non-blocking post from net/app; worker plays LED then haptics. */
 static QueueHandle_t g_swingFxQueue = nullptr;
 
+enum class SwingFxKind : uint8_t {
+    HostSwingHit = 1,
+    GameplaySwing = 2,
+};
+
+struct SwingFxMsg {
+    SwingFxKind kind;
+};
+
 static void swingFxWorkerTask(void * /*param*/) {
-    uint8_t tick;
+    SwingFxMsg msg{};
     for (;;) {
-        if (xQueueReceive(g_swingFxQueue, &tick, portMAX_DELAY) != pdTRUE) {
+        if (xQueueReceive(g_swingFxQueue, &msg, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-        // NeoPixel first (no I²C) so feedback starts immediately; then DRV path (longer, bus-heavy).
-        gStrip.playBallHit();
-        paddleFx_playSteps(gMux, kFxBallHitHaptic, PADDLE_FX_STEP_COUNT(kFxBallHitHaptic));
+        switch (msg.kind) {
+        case SwingFxKind::HostSwingHit:
+            // NeoPixel first (no I²C) so feedback starts immediately; then DRV path (longer, bus-heavy).
+            gStrip.playBallHit();
+            paddleFx_playSteps(gMux, kFxBallHitHaptic, PADDLE_FX_STEP_COUNT(kFxBallHitHaptic));
+            break;
+        case SwingFxKind::GameplaySwing:
+            // Gameplay jerk trigger: haptics only (keep LED reserved for host swing-hit feedback).
+            paddleFx_playSteps(gMux, kFxSwingHaptic, PADDLE_FX_STEP_COUNT(kFxSwingHaptic));
+            break;
+        default:
+            break;
+        }
     }
 }
 
@@ -67,8 +86,17 @@ static void queueSwingHostFx() {
     if (!g_swingFxQueue) {
         return;
     }
-    uint8_t one = 1;
-    (void)xQueueSend(g_swingFxQueue, &one, 0);
+    SwingFxMsg msg{SwingFxKind::HostSwingHit};
+    (void)xQueueSend(g_swingFxQueue, &msg, 0);
+}
+
+/** Enqueue gameplay "swing" haptics; never blocks the caller (drops if queue full). */
+static void queueGameplaySwingFx() {
+    if (!g_swingFxQueue) {
+        return;
+    }
+    SwingFxMsg msg{SwingFxKind::GameplaySwing};
+    (void)xQueueSend(g_swingFxQueue, &msg, 0);
 }
 
 static void triggerSwingHitAudioAsync() {
@@ -274,6 +302,8 @@ static void drainUiEvents() {
             SdLogger::serialPrintln("[tutorial] entering flood mode — ex,ey,ez,btn,impulse");
             break;
         case UiEvent::SetIdleColor:
+            // Always save the host-provided color for swing-hit feedback.
+            gStrip.setSwingHitColor(ev.r, ev.g, ev.b);
             if (getRunMode() == RunMode::Idle) {
                 gStrip.showSolidColor(ev.r, ev.g, ev.b);
                 if (SdLogger::instance().ok()) {
@@ -289,11 +319,11 @@ static void drainUiEvents() {
 static void pollButton(RunMode mode) {
     static bool down = false;
     static uint32_t tDown = 0;
-    static bool holdSent = false;
     static bool wifiForgetArmed = false;
     static bool stableRaw = false;
     static bool lastRawSample = false;
     static uint32_t rawChangedAt = 0;
+    static bool immediateDownSent = false;
 
     const bool raw = (digitalRead(BUTTON_PIN) == LOW);
     const uint32_t now = millis();
@@ -306,23 +336,46 @@ static void pollButton(RunMode mode) {
     if (stableRaw != lastRawSample && (now - rawChangedAt) >= kButtonDebounceMs) {
         stableRaw = lastRawSample;
         if (stableRaw) {
+            // Button pressed (debounced)
             down = true;
             tDown = now;
-            holdSent = false;
             wifiForgetArmed = false;
-            if (mode != RunMode::Tutorial) gNet.postText("detect btn push");
+            // If we didn't already notify on raw edge, notify now.
+            if (!immediateDownSent && mode != RunMode::Tutorial) {
+                gNet.postText("detect btn down");
+            }
         } else {
+            // Button released (debounced)
+            const uint32_t pressLen = now - tDown;
             down = false;
-            holdSent = false;
             wifiForgetArmed = false;
+            if (mode != RunMode::Tutorial) {
+                gNet.postText("detect btn up");
+                // If it was a short tap, also send the legacy "push" event.
+                if (pressLen < kButtonHoldMs) {
+                    gNet.postText("detect btn push");
+                }
+            }
+            // Clear immediate flag on release so next press will re-notify immediately.
+            immediateDownSent = false;
         }
     }
 
+    // Send immediate 'down' as soon as the raw sample shows a press (no debounce).
+    if (lastRawSample != stableRaw) {
+        // no-op: keep separate from immediate edge handler below
+    }
+
+    // Raw edge detection: when the instantaneous sample changes to pressed, notify immediately.
+    // `lastRawSample` is updated earlier in the function when raw changes, so detect that transition.
+    if (lastRawSample && !immediateDownSent) {
+        // raw==pressed and we haven't reported it yet
+        if (mode != RunMode::Tutorial) gNet.postText("detect btn down");
+        immediateDownSent = true;
+    }
+
     if (down) {
-        if (!holdSent && (now - tDown) >= kButtonHoldMs) {
-            holdSent = true;
-            if (mode != RunMode::Tutorial) gNet.postText("detect btn hold");
-        }
+        // When held long enough in Idle mode, still trigger Wi-Fi forget.
         if (mode == RunMode::Idle && (now - tDown) >= kWifiForgetHoldMs && !wifiForgetArmed) {
             wifiForgetArmed = true;
             gDisp.showTwoLines("WiFi setup", "Forgetting...");
@@ -342,7 +395,7 @@ static void pollButton(RunMode mode) {
  * Tutorial flood loop — runs on core 1, reads IMU as fast as I²C allows and
  * fires a UDP packet each iteration.  Does not use gJerk: sharing the same
  * JerkDetector at ~kHz tutorial rates corrupts prevUs_/filter state and breaks
- * gameplay jerk + UDP after switching modes.  Impulse column is always 0 here.
+ * gameplay jerk + UDP after switching modes.  Impulse column = local jerk (m/s^3).
  * Exits back to the normal appTask loop when mode changes away from Tutorial.
  */
 static void tutorialFloodLoop() {
@@ -429,7 +482,6 @@ static void tutorialFloodLoop() {
 static void appTask(void * /*param*/) {
     gJerk.configure(kGameplayJerkThreshold, kGameplayJerkRetriggerMs, kGameplayJerkLpfAlpha);
     uint32_t lastImu = 0;
-    uint32_t lastGameplayAccelTxMs = 0;
 
     for (;;) {
 #if !PICKLE_PRODUCTION
@@ -466,17 +518,14 @@ static void appTask(void * /*param*/) {
                 Vec3 a, euler;
                 imuReadLinearEuler(&a, &euler);
                 (void)euler;
-                const float accelMag = sqrtf(a.x * a.x + a.y * a.y + a.z * a.z);
-                if (accelMag >= kGameplayJerkThreshold &&
-                    (lastGameplayAccelTxMs == 0 ||
-                     (now - lastGameplayAccelTxMs) >= kGameplayJerkRetriggerMs)) {
-                    lastGameplayAccelTxMs = now;
-                    const float impulse = accelMag;
+                // Same jerk estimate as tutorial (JerkDetector); threshold + retrigger are inside update().
+                if (gJerk.update(a, micros())) {
+                    const float impulse = gJerk.lastJerkMagnitude();
                     char pkt[24];
                     (void)snprintf(pkt, sizeof(pkt), "%.1f", impulse);
 #if !PICKLE_PRODUCTION
                     SdLogger::serialPrintf(
-                        "[imu] tx linear_accel m/s^2 x=%.3f y=%.3f z=%.3f  accel|a|=%.1f m/s^2\n",
+                        "[imu] tx jerk m/s^3 x=%.3f y=%.3f z=%.3f  |jerk|=%.1f\n",
                         a.x, a.y, a.z, impulse);
                     if (SdLogger::instance().ok()) {
                         char jbuf[32];
@@ -485,6 +534,7 @@ static void appTask(void * /*param*/) {
                     }
 #endif
                     (void)gNet.postText(pkt);
+                    queueGameplaySwingFx();
                 }
             }
         }

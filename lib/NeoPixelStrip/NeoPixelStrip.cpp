@@ -22,7 +22,13 @@ void NeoPixelStrip::clear() {
 
 void NeoPixelStrip::playBootSequence() { fxNeoBootChase(strip_); }
 
-void NeoPixelStrip::playBallHit() { fxNeoBallHit(strip_); }
+void NeoPixelStrip::playBallHit() { fxNeoBallHit(strip_, swing_r_, swing_g_, swing_b_); }
+
+void NeoPixelStrip::setSwingHitColor(uint8_t r, uint8_t g, uint8_t b) {
+    swing_r_ = r;
+    swing_g_ = g;
+    swing_b_ = b;
+}
 
 void NeoPixelStrip::resetWifiLedAnim() {
     wifiAnimLastMs_ = 0;
